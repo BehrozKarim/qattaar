@@ -89,5 +89,5 @@ export function instruction(state: GameState): string {
   if (state.capture) return 'Mill formed. Remove an opponent’s stone.';
   if (phase(state) === 'placing') return 'Place a stone on an empty point.';
   if (phase(state) === 'flying') return 'Three stones left. Fly to any empty point.';
-  return 'Select a stone, then an adjacent empty point.';
+  return 'Drag a stone along a line, or tap to select and move.';
 }

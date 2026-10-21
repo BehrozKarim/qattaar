@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowCounterClockwiseIcon, ArrowRightIcon, BookOpenIcon, CheckIcon, CircleNotchIcon, CopyIcon, GlobeHemisphereWestIcon, LinkIcon, RobotIcon, SquaresFourIcon, UsersIcon, WifiHighIcon } from '@phosphor-icons/react';
 import { Board } from './components/Board';
 import { Modal } from './components/Modal';
-import { PlayerCard } from './components/PlayerCard';
+import { MatchPlayers } from './components/MatchPlayers';
 import { useLocalGame } from './hooks/useLocalGame';
 import { createGame, instruction, phase } from './game/engine';
 import type { Action } from './game/engine';
@@ -90,21 +90,21 @@ export default function App() {
   return <div className="app-shell">
     <header className="site-header">
       <a className="brand" href="/" aria-label="Qattaar home"><SquaresFourIcon size={30} weight="duotone" aria-hidden="true" /><span>qattaar<span className="brand-dot">.</span></span></a>
-      <span className="header-caption">An old game. A new connection.</span>
+      <span className="header-caption">Nine Men’s Morris</span>
       <button className="text-button" onClick={() => setRules(true)}><BookOpenIcon size={19} aria-hidden="true" /><span>How to play</span></button>
     </header>
 
     <main>
-      <div className="page-heading"><div><span className="eyebrow">THE CLASSIC GAME OF NINE MEN’S MORRIS</span><h1>Nine stones.<br className="mobile-break" /> Endless possibilities.</h1></div><p>A little strategy.<br />A good opponent. Your next move.</p></div>
+      <h1 className="sr-only">Qattaar · Nine Men’s Morris</h1>
       <div className="game-layout">
         <aside className="game-sidebar" aria-label="Game settings">
-          <div className="section-heading"><span>Make it your game</span><span className="small-index">01 / 03</span></div>
+          <div className="section-heading"><span>Game options</span></div>
           <div className="mode-options" role="group" aria-label="Game mode">
             {([{ id: 'ai', title: 'Play the computer', detail: 'A worthy opponent, anytime.', Icon: RobotIcon }, { id: 'local', title: 'Pass & play', detail: 'Two players. One screen.', Icon: UsersIcon }, { id: 'online', title: 'Play a friend', detail: 'Your own private online room.', Icon: GlobeHemisphereWestIcon }] as const).map(({ id, title, detail, Icon }) =>
               <button key={id} className={`mode-option ${mode === id ? 'chosen' : ''}`} aria-pressed={mode === id} disabled={busy} onClick={() => { if (mode !== id) newGame(id); }}><Icon size={23} aria-hidden="true" /><span><strong>{title}</strong><small>{detail}</small></span><span className="radio-indicator" aria-hidden="true">{mode === id && <span />}</span></button>)}
           </div>
           {mode === 'ai' && <div className="difficulty-section"><label id="difficulty-label">Choose your challenge</label><div className="difficulty-control" role="group" aria-labelledby="difficulty-label">{(['easy', 'medium', 'hard'] as const).map((level) => <button key={level} aria-pressed={local.difficulty === level} className={local.difficulty === level ? 'selected-level' : ''} onClick={() => { if (local.difficulty !== level) newGame('ai', level); }}>{level}</button>)}</div><p>{local.difficulty === 'easy' ? 'Find your rhythm. Room to experiment.' : local.difficulty === 'medium' ? 'A thoughtful challenge. Stay one move ahead.' : 'Thinks further ahead. Make every stone count.'}</p></div>}
-          {mode !== 'online' ? <button className="primary-button new-game" onClick={() => newGame()}>New game <ArrowRightIcon size={19} aria-hidden="true" /></button> : <div className="online-controls">
+          {mode === 'online' && <div className="online-controls">
             {!room ? <>
               {configured === false && <p className="setup-notice">Online rooms are not available yet. Play on this device or challenge the computer.</p>}
               <button className="primary-button" disabled={busy || configured !== true} onClick={() => void connect('create')}>{busy ? <CircleNotchIcon className="spin" size={18} aria-hidden="true" /> : 'Create a room'}<ArrowRightIcon size={18} aria-hidden="true" /></button>
@@ -112,23 +112,18 @@ export default function App() {
               <form onSubmit={(event) => { event.preventDefault(); void connect('join'); }}><label htmlFor="room-code">Room code</label><div className="join-row"><input id="room-code" value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="ABCD-EFGH" maxLength={12} autoComplete="off" autoCapitalize="characters" spellCheck={false} disabled={busy} /><button className="icon-button" type="submit" aria-label="Join room" disabled={busy || configured !== true || code.replace(/[^A-Z2-9]/g, '').length !== 8}><ArrowRightIcon size={21} /></button></div></form>
             </> : <><span className="eyebrow">YOUR ROOM CODE</span><div className="room-code">{room.code.slice(0, 4)}-{room.code.slice(4)}<button className="icon-button" aria-label="Copy room code" onClick={() => void copyRoom()}>{copied ? <CheckIcon size={20} /> : <CopyIcon size={20} />}</button></div><button className="secondary-button" onClick={() => void copyRoom(true)}><LinkIcon size={18} aria-hidden="true" />Copy invite link</button><p className="connection-status"><WifiHighIcon size={17} aria-hidden="true" />{room.connected ? 'Connected' : 'Reconnecting'} · You play {room.player === 1 ? 'Ivory' : 'Onyx'}</p><button className="text-button leave-button" disabled={busy} onClick={() => newGame('online')}>Leave room</button></>}
           </div>}
+          <MatchPlayers state={state} mode={mode} room={room} difficulty={local.difficulty} thinking={local.thinking} />
           <div className="sidebar-note"><span className="note-line" /><p>{mode === 'online' ? 'Private rooms for two. No account to create. Just share a code and make your move.' : 'Known as Qattaar in Balochi. A game of lines, patience, and seeing what comes next.'}</p></div>
         </aside>
 
         <section className="play-area" aria-label="Game table">
           <div className="table-topline"><span><span className={`status-dot ${online ? 'network' : ''}`} />{mode === 'ai' ? `VS COMPUTER / ${local.difficulty.toUpperCase()}` : mode === 'local' ? 'LOCAL / TWO PLAYERS' : 'ONLINE / PRIVATE ROOM'}</span><span>{String(state.ply).padStart(2, '0')} MOVES</span></div>
-          <Board key={`${mode}-${room?.code ?? ''}`} state={state} enabled={enabled && !(online && !room)} onMove={(action) => void move(action)} />
           <div className={`turn-status ${state.capture ? 'mill-status' : ''}`} role="status" aria-live="polite"><span className={`status-stone ${state.turn === 1 ? 'ivory' : 'onyx'}`} /><div><h2>{statusTitle}</h2><p>{statusText}</p></div>{mode !== 'online' && <button className="icon-button undo-button" aria-label="Undo last turn" title="Undo last turn" disabled={!local.canUndo} onClick={local.undo}><ArrowCounterClockwiseIcon size={21} /></button>}</div>
+          <Board key={`${mode}-${room?.code ?? ''}`} state={state} enabled={enabled && !(online && !room)} onMove={(action) => void move(action)} />
+          <div className="board-actions"><span>{phase(state) === 'placing' ? 'Tap an empty point to place a stone.' : 'Drag to move, or tap a stone then its destination.'}</span>{mode !== 'online' && <button className="secondary-button" onClick={() => newGame()}>New game <ArrowRightIcon size={17} aria-hidden="true" /></button>}</div>
           {(error || (!online && local.aiError)) && <div className="error-message" role="alert">{error || local.aiError}</div>}
         </section>
 
-        <aside className="match-sidebar" aria-label="Players and match information">
-          <div className="section-heading"><span>At the table</span><span className="small-index">02 / 03</span></div>
-          <PlayerCard player={1} state={state} name={mode === 'ai' ? 'You' : room ? room.player === 1 ? 'You' : 'Your friend' : 'Player one'} subtitle="Ivory stones" />
-          <div className="versus-label"><span />VS<span /></div>
-          <PlayerCard player={2} state={state} name={mode === 'ai' ? 'The computer' : room ? room.player === 2 ? 'You' : room.ready ? 'Your friend' : 'Waiting for a friend' : 'Player two'} subtitle={mode === 'ai' ? `${local.difficulty[0].toUpperCase()}${local.difficulty.slice(1)} · Onyx stones` : 'Onyx stones'} robot={mode === 'ai'} thinking={mode === 'ai' && local.thinking} />
-          <div className="match-guide"><div className="section-heading"><span>The rhythm of the game</span><span className="small-index">03 / 03</span></div>{[{ title: 'Place', text: 'Take turns placing your nine stones.' }, { title: 'Make a mill', text: 'Line up three. Remove one of theirs.' }, { title: 'Move', text: 'Slide along a line. Keep making mills.' }].map((item, index) => <div className={`guide-step ${(index === 0 && phase(state) === 'placing') || (index === 1 && state.capture) || (index === 2 && phase(state) !== 'placing') ? 'current' : ''}`} key={item.title}><span>{index + 1}</span><div><strong>{item.title}</strong><p>{item.text}</p></div></div>)}<button className="text-button" onClick={() => setRules(true)}>The finer details <ArrowRightIcon size={16} aria-hidden="true" /></button></div>
-        </aside>
       </div>
     </main>
     <footer><span>Rooted in tradition. Played together.</span><span>QATTAAR <span className="footer-divider">/</span> NINE MEN’S MORRIS</span></footer>

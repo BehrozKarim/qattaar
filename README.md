@@ -13,6 +13,8 @@ npm run dev
 
 Open the localhost URL printed by Vite. Local games and AI work immediately without Firebase. Games save automatically on this device. The production build caches its assets after the first successful visit so local play and AI can work without an internet connection.
 
+The board uses ivory and charcoal stones on a sand-colored surface. On phones it fills the available width, with compact player and game controls above it. During the movement phase, drag a stone onto a valid empty point, or tap the stone and then its destination. Mouse, pen, and touch use Pointer Events; keyboard players can use Tab and Enter. Invalid drops keep the original position. Dragging is disabled during placement, capture, the opponent's turn, and finished games. Scroll and pinch zoom remain available away from movable stones.
+
 ```sh
 npm run check       # lint, rules-engine/protocol tests, TypeScript, production build
 npm run preview     # serve the production build
