@@ -2,6 +2,8 @@
 
 Qattaar, a browser game offering Balochi Qattaar and Classic Nine Men's Morris, with local two-player play, three AI difficulties, and private online rooms.
 
+[Play Qattaar](https://qattaar.web.app)
+
 ## Run locally
 
 Requires Node.js 22.12+ (Node 24 recommended).
