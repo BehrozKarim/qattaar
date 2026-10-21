@@ -168,6 +168,20 @@ label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 10px; 
 .join-row { display: flex; gap: 8px; }
 input { min-width: 0; width: 100%; border: 1px solid #777c88; border-radius: 8px; background: #111318; color: var(--text); min-height: 44px; padding: 10px 12px; font-size: 16px; letter-spacing: 1px; }
 input::placeholder { color: #9fa3ae; }
+.online-settings { margin-bottom: 18px; }
+.online-settings input { font-size: 16px; letter-spacing: 0; }
+.online-settings label:not(:first-child) { margin-top: 14px; }
+.online-settings select { width: 100%; min-height: 44px; border: 1px solid #777c88; border-radius: 8px; padding: 10px 12px; background: #111318; color: var(--text); font: inherit; font-size: 14px; }
+.online-settings p, .room-settings { font-size: 11px; color: var(--muted); line-height: 1.6; margin: 8px 0 0; }
+.turn-clock { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); margin: 0 0 8px; }
+.turn-clock strong, .turn-clock span { display: block; }
+.turn-clock > div { min-width: 0; }
+.turn-clock strong { font-size: 12px; overflow-wrap: anywhere; }
+.turn-clock span { font-size: 10px; color: var(--muted); margin-top: 3px; }
+.turn-clock time { font-size: 26px; font-weight: 750; font-variant-numeric: tabular-nums; color: var(--accent); }
+.turn-clock.clock-low { border-color: #e6a08c; }
+.turn-clock.clock-low time { color: #ffbca7; }
+.result-card p.result-note { color: var(--muted); font-size: 11px; margin: 8px 0 0; line-height: 1.4; }
 .room-code { font-size: 22px; font-weight: 650; letter-spacing: 1px; display: flex; align-items: center; gap: 4px; margin: 10px 0 12px; }
 .room-code .icon-button { border: 0; background: transparent; }
 .connection-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin: 14px 0 3px; }

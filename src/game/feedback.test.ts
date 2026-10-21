@@ -18,6 +18,11 @@ describe('match feedback', () => {
   it('shows a local white winner and piece-count reason', () => {
     expect(matchResult({ ...createGame(), winner: 1, endReason: 'pieces' }, null)).toEqual({ outcome: 'win', title: 'White wins!', detail: 'Black has fewer than three pieces left.' });
   });
+  it('explains timeouts to both players', () => {
+    const state = { ...createGame(), winner: 2 as const, endReason: 'timeout' as const };
+    expect(matchResult(state, 1)).toMatchObject({ outcome: 'loss', detail: 'You ran out of time.' });
+    expect(matchResult(state, 2)).toMatchObject({ outcome: 'win', detail: 'White ran out of time.' });
+  });
   it('distinguishes the two draw reasons and unfinished games', () => {
     expect(matchResult(createGame(), 1)).toBeNull();
     expect(matchResult({ ...createGame(), winner: 3, endReason: 'repetition' }, 1)?.detail).toContain('three times');

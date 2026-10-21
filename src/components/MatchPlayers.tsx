@@ -7,7 +7,7 @@ interface Props { state: GameState; mode: 'ai' | 'local' | 'online'; room: RoomV
 
 export function MatchPlayers({ state, mode, room, difficulty, thinking, captureFeedback }: Props) {
   return <div className="match-players" role="group" aria-label="Players">
-    <PlayerCard player={1} state={state} name={mode === 'ai' ? 'You' : room ? room.player === 1 ? 'You' : 'Your friend' : 'Player one'} subtitle="White" captured={captureFeedback?.player === 1} />
-    <PlayerCard player={2} state={state} name={mode === 'ai' ? 'Computer' : room ? room.player === 2 ? 'You' : room.ready ? 'Your friend' : 'Waiting for a friend' : 'Player two'} subtitle={mode === 'ai' ? `${difficulty[0].toUpperCase()}${difficulty.slice(1)} · Black` : 'Black'} robot={mode === 'ai'} thinking={mode === 'ai' && thinking} captured={captureFeedback?.player === 2} />
+    <PlayerCard player={1} state={state} name={mode === 'ai' ? 'You' : room ? room.names[0] : 'Player one'} subtitle={`White${room?.player === 1 ? ' · You' : ''}`} captured={captureFeedback?.player === 1} />
+    <PlayerCard player={2} state={state} name={mode === 'ai' ? 'Computer' : room ? room.names[1] : 'Player two'} subtitle={mode === 'ai' ? `${difficulty[0].toUpperCase()}${difficulty.slice(1)} · Black` : `Black${room?.player === 2 ? ' · You' : ''}`} robot={mode === 'ai'} thinking={mode === 'ai' && thinking} captured={captureFeedback?.player === 2} />
   </div>;
 }

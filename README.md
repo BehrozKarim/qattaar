@@ -23,6 +23,10 @@ A blue ring marks the opponent's last placement or destination. For movement, a 
 
 A capture marks the removed piece's location with a crossed-out piece and a −1 badge for 1.8 seconds. The turn message identifies whose piece was taken and where, the affected player card highlights, and the last-capture message remains below the board. Input pauses while the capture is shown; AI waits after a capture and briefly shows a new mill before choosing its capture. Reduced-motion settings keep the marker static. Finished games show a large win/loss/draw panel with the reason, Play again, and View board controls.
 
+For online play, enter a name (up to 20 characters) or keep the generated nickname. The name is remembered on this device and shown to both players. Before creating a room, the host selects **No timer**, **30 seconds**, **1 minute**, or **2 minutes** per turn. The first clock starts when the guest joins. Forming a mill and choosing its capture share one allowance; the next player receives an extra 1.8 seconds for the capture feedback. Running out of time loses the game, and clocks continue through disconnections. Names and timer settings stay fixed within the room.
+
+After an online game, choose **Play again**. Your opponent sees **Accept rematch**; once both agree, a fresh board starts in the same room with the same names, rules, and timer. White still goes first. The rematch button also remains below the board after dismissing the result panel. Rooms created before this update can finish their current game; create a fresh room for names, timers, and rematches.
+
 ```sh
 npm run check       # lint, rules-engine/protocol tests, TypeScript, production build
 npm run preview     # serve the production build
@@ -62,7 +66,7 @@ Open the printed URL in two independently opened tabs, then create/join a room. 
 npm run test:rules
 ```
 
-The emulator may download its runtime on first use. Rule tests verify access control, all 40 reservation slots, expired reservations, guest contention, turn ownership, and append-only move history. To change the rules, edit `scripts/generate-rules.mjs`, run `node scripts/generate-rules.mjs`, then rerun the tests. Commit both the generator and generated rules.
+The emulator may download its runtime on first use. Rule tests verify access control, all 40 reservation slots, expired reservations, guest contention, turn ownership, append-only history, names, server-stamped clocks, timeout claims, and mutual rematch acceptance. To change the rules, edit `scripts/generate-rules.mjs`, run `node scripts/generate-rules.mjs`, then rerun the tests. Commit both the generator and generated rules.
 
 ## Deploy on Firebase Hosting
 
@@ -96,7 +100,8 @@ The deployment contains static assets only, with no Vercel Functions. Vercel's H
 - Only an owner or an expired lease can modify a reservation. Other players cannot list occupied reservation details. Competing reservations and guest joins use transactions.
 - Hosts renew reservations every 30 seconds, with a two-minute expiry. Abandoned reservations can then be reused. Browser suspension can cause expiry; the app reports that the room must be recreated. Firebase presence detects disconnections, which may take time.
 - Rooms last at most two hours. The next creator reclaiming a reservation removes its old room; closing a room as its host removes it immediately. There are at most 40 normally retained rooms. One abandoned room can remain per slot until reclamation, without a paid cleanup service.
-- Moves are capped at 2,000 actions per room. Clients listen only to their room, not to a global lobby. History is bounded, but replay/download usage grows over a match.
+- Moves are capped at 2,000 actions per game. Rematches clear the previous game's history while retaining the original room expiry. Clients listen only to their room, not to a global lobby. History is bounded, but replay/download usage grows over a match.
+- Countdowns tick locally without per-second database writes. Turn changes use server timestamps, and database rules reject moves arriving after the deadline. Either connected player can settle the timeout result; if both disconnect, settlement happens when a player reconnects while the room reservation remains valid. There is no scheduled backend task or Cloud Function.
 - Spark's **100 concurrent Realtime Database connections** are the hard fallback. Firebase rejects additional connections while existing users remain connected. The app's room cap controls seats, not every incoming connection, so connection failures are handled separately.
 - Connection limits do not cap total monthly downloads/storage. Those quotas can still be exhausted. On Spark the result is restricted/unavailable online play, not automatic usage billing. Keep the project on Spark without linked billing.
 
@@ -112,7 +117,7 @@ Both variants use placement, one capture per formed mill, and protected mills. B
 src/game/          Pure board topology, rules, and AI search; no React or Firebase
 src/hooks/         Local persistence and worker lifecycle
 src/components/    Board, player information, accessible modal
-src/multiplayer/   Provider-independent session contract and Firebase adapter
+src/multiplayer/   Pure room replay/timing model, session contract, Firebase adapter
 firebase/          Deployable security rules
 scripts/           Rule generation and production offline-cache generation
 tests/             Firebase emulator security tests

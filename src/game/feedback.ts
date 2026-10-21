@@ -32,6 +32,7 @@ export function matchResult(state: GameState, viewer: Player | null) {
   const outcome = viewer === null || viewer === state.winner ? 'win' as const : 'loss' as const;
   const title = viewer === null ? `${playerName(state.winner)} wins!` : outcome === 'win' ? 'You won!' : 'You lost';
   const detail = state.endReason === 'blocked' ? `${subject} no legal moves left.`
+    : state.endReason === 'timeout' ? `${viewer === loser ? 'You ran' : `${playerName(loser)} ran`} out of time.`
     : state.endReason === 'pieces' ? `${subject} fewer than three pieces left.` : `${playerName(state.winner)} wins the game.`;
   return { outcome, title, detail };
 }

@@ -1,12 +1,17 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { browserSessionPersistence, connectAuthEmulator, getAuth, setPersistence, signInAnonymously } from 'firebase/auth';
-import { connectDatabaseEmulator, get, getDatabase, goOffline, goOnline, onDisconnect, onValue, ref, remove, runTransaction, set, update } from 'firebase/database';
+import { connectDatabaseEmulator, get, getDatabase, goOffline, goOnline, onDisconnect, onValue, ref, remove, runTransaction, serverTimestamp, set, update } from 'firebase/database';
 import type { Database, Unsubscribe } from 'firebase/database';
-import { applyAction, createGame } from '../game/engine';
-import { VARIANTS, variantFromRuleset } from '../game/variants';
+import { applyAction, opponent } from '../game/engine';
+import { CAPTURE_FEEDBACK_MS } from '../game/feedback';
+import { VARIANTS } from '../game/variants';
 import type { Variant } from '../game/variants';
-import type { Action, Player } from '../game/engine';
+import type { Action } from '../game/engine';
 import type { MultiplayerSession, RoomView, SessionCallbacks } from './types';
+import { MOVE_TIMES, replayRoom, ROOM_PROTOCOL, turnDeadline, validName } from './room';
+import type { MoveSeconds, StoredRoom } from './room';
+export { replayRoom } from './room';
+export type { StoredRoom } from './room';
 
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -23,34 +28,6 @@ export const normalizeCode = (code: string) => code.toUpperCase().replace(/[^A-Z
 export const displayCode = (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`;
 
 interface Lease { uid: string; code: string; expiresAt: number }
-export interface StoredRoom {
-  ruleset: string;
-  host: string;
-  guest: string;
-  slot: string;
-  createdAt: number;
-  expiresAt: number;
-  revision: number;
-  turn: Player;
-  moves?: Record<string, { uid: string; action: Action }>;
-  presence?: Record<string, boolean>;
-}
-
-/** Replay is the single source of truth; clients never trust a remote board snapshot. */
-export function replayRoom(room: StoredRoom) {
-  const variant = variantFromRuleset(room.ruleset);
-  if (!variant) throw new Error('This room uses different rules. Both players should refresh and create a new room.');
-  if (!Number.isInteger(room.revision) || room.revision < 0 || room.revision > 2000) throw new Error('This room has an invalid move history.');
-  let state = createGame(variant);
-  for (let i = 0; i < room.revision; i++) {
-    const move = room.moves?.[i];
-    if (!move || move.uid !== (state.turn === 1 ? room.host : room.guest)) throw new Error('This room has an invalid move history.');
-    state = applyAction(state, move.action);
-  }
-  if (state.turn !== room.turn) throw new Error('The room is out of sync. Please leave and create a new room.');
-  return state;
-}
-
 function randomCode(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   return Array.from(crypto.getRandomValues(new Uint8Array(8)), (n) => alphabet[n % alphabet.length]).join('');
@@ -76,6 +53,10 @@ class FirebaseSession implements MultiplayerSession {
   private clockOffset = 0;
   private listeners: Unsubscribe[] = [];
   private heartbeat?: ReturnType<typeof setInterval>;
+  private clockTick?: ReturnType<typeof setInterval>;
+  private settling = false;
+  private timeoutRetryAt = 0;
+  private restarting = false;
 
   constructor(private callbacks: SessionCallbacks) {}
 
@@ -93,7 +74,7 @@ class FirebaseSession implements MultiplayerSession {
     this.uid = (auth.currentUser ?? (await signInAnonymously(auth)).user).uid;
     if (this.stopped) throw new Error('Connection cancelled.');
     goOnline(this.db);
-    this.listeners.push(onValue(ref(this.db, '.info/serverTimeOffset'), (snapshot) => { this.clockOffset = Number(snapshot.val()) || 0; }));
+    this.listeners.push(onValue(ref(this.db, '.info/serverTimeOffset'), (snapshot) => { this.clockOffset = Number(snapshot.val()) || 0; this.emit(); }));
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Multiplayer could not connect. It may be full or temporarily unavailable. Try again shortly.')), 10_000);
       const unsubscribe = onValue(ref(this.db, '.info/connected'), (snapshot) => {
@@ -106,7 +87,9 @@ class FirebaseSession implements MultiplayerSession {
     if (this.stopped) throw new Error('Connection cancelled.');
   }
 
-  async create(variant: Variant) {
+  async create(variant: Variant, name: string, moveSeconds: MoveSeconds) {
+    name = name.trim();
+    if (!validName(name) || !MOVE_TIMES.includes(moveSeconds)) throw new Error('Choose a name of 1–20 characters and a valid move timer.');
     await this.connect();
     const offset = crypto.getRandomValues(new Uint8Array(1))[0] % ROOM_LIMIT;
     for (let i = 0; i < ROOM_LIMIT; i++) {
@@ -130,6 +113,7 @@ class FirebaseSession implements MultiplayerSession {
       const now = Date.now() + this.clockOffset;
       await set(ref(this.db, `rooms/${code}`), {
         ruleset: VARIANTS[variant].ruleset, host: this.uid, guest: '', slot, createdAt: now, expiresAt: now + ROOM_MS, revision: 0, turn: 1,
+        protocol: ROOM_PROTOCOL, round: 0, hostName: name, guestName: '', moveSeconds, turnStartedAt: 0, turnDelayMs: 0, finished: 0, timeout: 0,
       } satisfies StoredRoom);
       await this.watch();
       return;
@@ -137,7 +121,9 @@ class FirebaseSession implements MultiplayerSession {
     throw new Error('All 40 multiplayer rooms are occupied. Try again shortly, or play against AI.');
   }
 
-  async join(input: string) {
+  async join(input: string, name: string) {
+    name = name.trim();
+    if (!validName(name)) throw new Error('Choose a name of 1–20 characters.');
     const code = normalizeCode(input);
     if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) throw new Error('Enter the eight-character room code.');
     await this.connect();
@@ -149,11 +135,15 @@ class FirebaseSession implements MultiplayerSession {
       await this.watch();
       return;
     }
-    const result = await runTransaction(ref(this.db, `rooms/${code}/guest`), (guest: string | null) => {
-      if (guest !== null && guest !== '' && guest !== this.uid) return;
-      return this.uid;
-    }, { applyLocally: false });
-    if (!result.committed) throw new Error('This room is full or no longer exists.');
+    const stored = snapshot.val() as StoredRoom;
+    if (stored.guest && stored.guest !== this.uid) throw new Error('This room is full.');
+    if (!stored.guest) {
+      if (stored.protocol === ROOM_PROTOCOL) await update(ref(this.db, `rooms/${code}`), { guest: this.uid, guestName: name, turnStartedAt: serverTimestamp() });
+      else {
+        const result = await runTransaction(ref(this.db, `rooms/${code}/guest`), (guest: string | null) => guest === null || guest === '' || guest === this.uid ? this.uid : undefined, { applyLocally: false });
+        if (!result.committed) throw new Error('This room is full or no longer exists.');
+      }
+    }
     this.code = code;
     await this.watch();
   }
@@ -170,6 +160,7 @@ class FirebaseSession implements MultiplayerSession {
       this.host = this.room.host === this.uid;
       this.slot = this.room.slot;
       this.emit();
+      void this.maybeRestart();
     }, (error) => this.callbacks.onError(friendlyFirebaseError(error))));
     // Presence operations are registered again after each network reconnection.
     this.listeners.push(onValue(ref(this.db, '.info/connected'), (snapshot) => {
@@ -187,6 +178,7 @@ class FirebaseSession implements MultiplayerSession {
       }).then((result) => { if (!result.committed) this.callbacks.onError('This room reservation expired. Please create a new room.'); })
         .catch((error) => this.callbacks.onError(friendlyFirebaseError(error)));
     }, 30_000);
+    this.clockTick = setInterval(() => void this.maybeTimeout(), 500);
   }
 
   private emit() {
@@ -196,6 +188,10 @@ class FirebaseSession implements MultiplayerSession {
       const view: RoomView = {
         code: this.code, player: this.host ? 1 : 2, state: replayRoom(this.room),
         ready: Boolean(this.room.guest), opponentOnline: this.room.presence?.[other] === true, connected: this.connected,
+        names: [this.room.hostName ?? 'Player one', this.room.guestName || 'Waiting for a friend'],
+        round: this.room.round ?? 0, moveSeconds: this.room.moveSeconds ?? 0, deadline: turnDeadline(this.room), serverOffset: this.clockOffset,
+        rematchRequested: this.room.rematch?.[this.uid] === true, opponentRequestedRematch: this.room.rematch?.[other] === true,
+        supportsRematch: this.room.protocol === ROOM_PROTOCOL,
       };
       this.callbacks.onRoom(view);
     } catch (error) { this.callbacks.onError(friendlyFirebaseError(error)); }
@@ -210,12 +206,50 @@ class FirebaseSession implements MultiplayerSession {
     // Atomic multipath update + append-only rules reject competing/stale writes.
     await update(ref(this.db, `rooms/${this.code}`), {
       [`moves/${room.revision}`]: { uid: this.uid, action }, revision: room.revision + 1, turn: next.turn,
+      ...(room.protocol === ROOM_PROTOCOL ? { round: room.round, finished: next.winner, turnStartedAt: next.turn === state.turn ? room.turnStartedAt : serverTimestamp(), turnDelayMs: next.turn === state.turn ? room.turnDelayMs : action.type === 'capture' ? CAPTURE_FEEDBACK_MS : 0 } : {}),
     });
+  }
+
+  private async maybeTimeout() {
+    const room = this.room;
+    if (!room || !this.connected || this.stopped || this.settling || Date.now() < this.timeoutRetryAt || Date.now() + this.clockOffset >= room.expiresAt) return;
+    const deadline = turnDeadline(room);
+    if (deadline === null || Date.now() + this.clockOffset < deadline + 100) return;
+    this.settling = true;
+    try { await update(ref(this.db, `rooms/${this.code}`), { round: room.round, finished: opponent(room.turn), timeout: room.turn }); }
+    catch {
+      // A competing write or expired reservation can reject a claim. Back off
+      // instead of repeatedly writing while the room is unavailable.
+      this.timeoutRetryAt = Date.now() + 5000;
+    }
+    finally { this.settling = false; }
+  }
+
+  async requestRematch() {
+    if (!this.room || !this.connected) throw new Error('Reconnect before requesting a rematch.');
+    if (this.room.protocol !== ROOM_PROTOCOL) throw new Error('Create a fresh room to use rematches, names, and timers.');
+    if (!replayRoom(this.room).winner) throw new Error('Finish this game before requesting a rematch.');
+    await set(ref(this.db, `rooms/${this.code}/rematch/${this.uid}`), true);
+    await this.maybeRestart();
+  }
+
+  private async maybeRestart() {
+    const room = this.room;
+    if (!room || !this.connected || this.stopped || this.restarting || !room.finished || !room.rematch?.[room.host] || !room.rematch?.[room.guest]) return;
+    this.restarting = true;
+    try {
+      await runTransaction(ref(this.db, `rooms/${this.code}`), (current: StoredRoom | null) => {
+        if (!current || current.round !== room.round || !current.finished || !current.rematch?.[current.host] || !current.rematch?.[current.guest]) return;
+        return { ...current, round: (current.round ?? 0) + 1, revision: 0, turn: 1, moves: null, finished: 0, timeout: 0, rematch: null, turnStartedAt: serverTimestamp(), turnDelayMs: 0 };
+      }, { applyLocally: false });
+    } catch (error) { if (this.room?.round === room.round) this.callbacks.onError(friendlyFirebaseError(error)); }
+    finally { this.restarting = false; }
   }
 
   async close() {
     this.stopped = true;
     clearInterval(this.heartbeat);
+    clearInterval(this.clockTick);
     this.listeners.forEach((unsubscribe) => unsubscribe());
     if (!this.db) return;
     const cleanup = async () => {
