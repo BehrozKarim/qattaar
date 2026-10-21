@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env*
+!.env.example
+!.env.emulated
+*.tsbuildinfo
+.firebase/
+*-debug.log*
+coverage/
+.vercel/
+test-results/
+.local/
