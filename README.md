@@ -31,7 +31,7 @@ For repeatable browser checks of captures, winning captures, blocked-player wins
 ## Enable online rooms with Firebase Spark
 
 1. In the [Firebase console](https://console.firebase.google.com/), create a project named Qattaar. Keep the **Spark** plan. Do not link a Cloud Billing account or upgrade to Blaze. Analytics is optional and not used by this app.
-2. Register a **Web app** in Project settings. You do not need Firebase Hosting; Vercel serves the frontend.
+2. Register a **Web app** in Project settings. Select Firebase Hosting if using the deployment instructions below; Vercel is an alternative.
 3. Under **Build → Authentication → Sign-in method**, enable **Anonymous** sign-in. Players get a temporary identity without filling out a registration form.
 4. Under **Build → Realtime Database**, create a database in your preferred region, starting in **locked mode**. Use Realtime Database, not Firestore.
 5. Open its **Rules** tab, paste the contents of [firebase/database.rules.json](firebase/database.rules.json), and publish. Do not use open test-mode rules. Alternatively, run `npx firebase login` followed by `npx firebase deploy --only database --project YOUR_PROJECT_ID`.
@@ -62,7 +62,23 @@ npm run test:rules
 
 The emulator may download its runtime on first use. Rule tests verify access control, all 40 reservation slots, expired reservations, guest contention, turn ownership, and append-only move history. To change the rules, edit `scripts/generate-rules.mjs`, run `node scripts/generate-rules.mjs`, then rerun the tests. Commit both the generator and generated rules.
 
-## Deploy on Vercel
+## Deploy on Firebase Hosting
+
+Use **Firebase Hosting** for the static game. This setup works on Spark and does not use Firebase App Hosting, Cloud Functions, or a server runtime. Authentication and Realtime Database remain in the same Firebase project.
+
+1. Complete the Firebase setup above, including enabling Anonymous sign-in. Put your five public Web-app settings in `.env.local`. Leave `VITE_USE_FIREBASE_EMULATORS` unset for production. Analytics, Storage, and Messaging config fields are not used by this app.
+2. The checked-in `.firebaserc` selects the `qattaar` project. If using another project, change that default or pass `--project YOUR_PROJECT_ID` to the commands below. Hosting's default site is used.
+3. In this repository's terminal, sign in using `npx firebase login`. Use the Google account that owns the Firebase project. Do not paste login tokens or private credentials into chat or source files.
+4. Run `npm run deploy:firebase`. This publishes **both** the website and the database security rules. The Hosting predeploy hook runs `npm run build` first, using `.env.local`, so the Firebase config is included in the production build. No `firebase init` step is needed for this repository.
+5. Open the Hosting URL printed by the CLI (normally `https://qattaar.web.app`) on two devices, create a room, and join it. Try each rule variant and confirm that moves sync. Verify that invite links work when opened directly and that AI/local play works after a reload.
+
+For an explicit project override, use `npm run deploy:firebase -- --project YOUR_PROJECT_ID`. For website-only updates, use `npx firebase deploy --only hosting`; this also rebuilds the website. Use `npm run check` before publishing code changes. Future deploys need the local Firebase configuration too; it is intentionally absent from Git.
+
+`firebase.json` serves only `dist/`, rewrites client-side paths to `index.html`, preserves the security headers used on Vercel, caches hashed assets for one year, and requires revalidation of the HTML and service-worker script. The built game does not initialize Google Analytics.
+
+Keep the project on **Spark** with no linked billing account. Hosting and Realtime Database have separate quotas. Hosting quota exhaustion can interrupt the website or block new releases; it does not enable paid overages on Spark. See [Firebase Hosting quota behavior](https://firebase.google.com/docs/hosting/usage-quotas-pricing).
+
+## Deploy on Vercel (alternative)
 
 1. Import [BehrozKarim/qattaar](https://github.com/BehrozKarim/qattaar) into Vercel.
 2. Use the **Vite** preset. Build command: `npm run build`. Output directory: `dist`. These settings are also in `vercel.json`.
