@@ -8,7 +8,7 @@ import { VARIANTS } from '../game/variants';
 import type { Variant } from '../game/variants';
 import type { Action } from '../game/engine';
 import type { MultiplayerSession, RoomView, SessionCallbacks } from './types';
-import { MOVE_TIMES, replayRoom, ROOM_PROTOCOL, turnDeadline, validName } from './room';
+import { hasRoomSettings, MOVE_TIMES, replayRoom, ROOM_PROTOCOL, scheduledStart, START_COUNTDOWN_MS, turnDeadline, validName } from './room';
 import type { MoveSeconds, StoredRoom } from './room';
 export { replayRoom } from './room';
 export type { StoredRoom } from './room';
@@ -57,6 +57,7 @@ class FirebaseSession implements MultiplayerSession {
   private settling = false;
   private timeoutRetryAt = 0;
   private restarting = false;
+  private starting = false;
 
   constructor(private callbacks: SessionCallbacks) {}
 
@@ -113,7 +114,7 @@ class FirebaseSession implements MultiplayerSession {
       const now = Date.now() + this.clockOffset;
       await set(ref(this.db, `rooms/${code}`), {
         ruleset: VARIANTS[variant].ruleset, host: this.uid, guest: '', slot, createdAt: now, expiresAt: now + ROOM_MS, revision: 0, turn: 1,
-        protocol: ROOM_PROTOCOL, round: 0, hostName: name, guestName: '', moveSeconds, turnStartedAt: 0, turnDelayMs: 0, finished: 0, timeout: 0,
+        protocol: ROOM_PROTOCOL, round: 0, hostName: name, guestName: '', moveSeconds, turnStartedAt: 0, turnDelayMs: 0, finished: 0, timeout: 0, startedAt: 0,
       } satisfies StoredRoom);
       await this.watch();
       return;
@@ -138,7 +139,7 @@ class FirebaseSession implements MultiplayerSession {
     const stored = snapshot.val() as StoredRoom;
     if (stored.guest && stored.guest !== this.uid) throw new Error('This room is full.');
     if (!stored.guest) {
-      if (stored.protocol === ROOM_PROTOCOL) await update(ref(this.db, `rooms/${code}`), { guest: this.uid, guestName: name, turnStartedAt: serverTimestamp() });
+      if (hasRoomSettings(stored)) await update(ref(this.db, `rooms/${code}`), { guest: this.uid, guestName: name, ...(stored.protocol === 2 ? { turnStartedAt: serverTimestamp() } : {}) });
       else {
         const result = await runTransaction(ref(this.db, `rooms/${code}/guest`), (guest: string | null) => guest === null || guest === '' || guest === this.uid ? this.uid : undefined, { applyLocally: false });
         if (!result.committed) throw new Error('This room is full or no longer exists.');
@@ -160,6 +161,7 @@ class FirebaseSession implements MultiplayerSession {
       this.host = this.room.host === this.uid;
       this.slot = this.room.slot;
       this.emit();
+      void this.maybeStart();
       void this.maybeRestart();
     }, (error) => this.callbacks.onError(friendlyFirebaseError(error))));
     // Presence operations are registered again after each network reconnection.
@@ -191,7 +193,8 @@ class FirebaseSession implements MultiplayerSession {
         names: [this.room.hostName ?? 'Player one', this.room.guestName || 'Waiting for a friend'],
         round: this.room.round ?? 0, moveSeconds: this.room.moveSeconds ?? 0, deadline: turnDeadline(this.room), serverOffset: this.clockOffset,
         rematchRequested: this.room.rematch?.[this.uid] === true, opponentRequestedRematch: this.room.rematch?.[other] === true,
-        supportsRematch: this.room.protocol === ROOM_PROTOCOL,
+        supportsRematch: hasRoomSettings(this.room), supportsReady: this.room.protocol === ROOM_PROTOCOL,
+        youReady: this.room.ready?.[this.uid] === true, opponentReady: this.room.ready?.[other] === true, startsAt: scheduledStart(this.room),
       };
       this.callbacks.onRoom(view);
     } catch (error) { this.callbacks.onError(friendlyFirebaseError(error)); }
@@ -200,13 +203,15 @@ class FirebaseSession implements MultiplayerSession {
   async move(action: Action) {
     if (!this.room || !this.connected || !this.room.guest) throw new Error('Wait for both players to connect.');
     const room = this.room;
+    const startsAt = scheduledStart(room);
+    if (room.protocol === ROOM_PROTOCOL && (startsAt === null || Date.now() + this.clockOffset < startsAt)) throw new Error('Wait for both players to be ready and the countdown to finish.');
     const state = replayRoom(room);
     if ((state.turn === 1 ? room.host : room.guest) !== this.uid) throw new Error('It is your opponent’s turn.');
     const next = applyAction(state, action);
     // Atomic multipath update + append-only rules reject competing/stale writes.
     await update(ref(this.db, `rooms/${this.code}`), {
       [`moves/${room.revision}`]: { uid: this.uid, action }, revision: room.revision + 1, turn: next.turn,
-      ...(room.protocol === ROOM_PROTOCOL ? { round: room.round, finished: next.winner, turnStartedAt: next.turn === state.turn ? room.turnStartedAt : serverTimestamp(), turnDelayMs: next.turn === state.turn ? room.turnDelayMs : action.type === 'capture' ? CAPTURE_FEEDBACK_MS : 0 } : {}),
+      ...(hasRoomSettings(room) ? { round: room.round, finished: next.winner, turnStartedAt: next.turn === state.turn ? room.turnStartedAt : serverTimestamp(), turnDelayMs: next.turn === state.turn ? room.turnDelayMs : action.type === 'capture' ? CAPTURE_FEEDBACK_MS : 0 } : {}),
     });
   }
 
@@ -227,10 +232,29 @@ class FirebaseSession implements MultiplayerSession {
 
   async requestRematch() {
     if (!this.room || !this.connected) throw new Error('Reconnect before requesting a rematch.');
-    if (this.room.protocol !== ROOM_PROTOCOL) throw new Error('Create a fresh room to use rematches, names, and timers.');
+    if (!hasRoomSettings(this.room)) throw new Error('Create a fresh room to use rematches, names, and timers.');
     if (!replayRoom(this.room).winner) throw new Error('Finish this game before requesting a rematch.');
     await set(ref(this.db, `rooms/${this.code}/rematch/${this.uid}`), true);
     await this.maybeRestart();
+  }
+
+  async markReady() {
+    if (!this.room || !this.connected || this.room.protocol !== ROOM_PROTOCOL || this.room.startedAt) throw new Error('Reconnect to the waiting room before getting ready.');
+    await set(ref(this.db, `rooms/${this.code}/ready/${this.uid}`), true);
+    await this.maybeStart();
+  }
+
+  private async maybeStart() {
+    const room = this.room;
+    if (!room || room.protocol !== ROOM_PROTOCOL || room.startedAt || !this.connected || this.stopped || this.starting || !room.guest || !room.ready?.[room.host] || !room.ready?.[room.guest] || !room.presence?.[room.host] || !room.presence?.[room.guest]) return;
+    this.starting = true;
+    try {
+      await runTransaction(ref(this.db, `rooms/${this.code}`), (current: StoredRoom | null) => {
+        if (!current || current.startedAt || !current.guest || !current.ready?.[current.host] || !current.ready?.[current.guest] || !current.presence?.[current.host] || !current.presence?.[current.guest]) return;
+        return { ...current, startedAt: serverTimestamp(), turnStartedAt: serverTimestamp(), turnDelayMs: START_COUNTDOWN_MS };
+      }, { applyLocally: false });
+    } catch (error) { if (!this.room?.startedAt) this.callbacks.onError(friendlyFirebaseError(error)); }
+    finally { this.starting = false; }
   }
 
   private async maybeRestart() {
@@ -240,7 +264,7 @@ class FirebaseSession implements MultiplayerSession {
     try {
       await runTransaction(ref(this.db, `rooms/${this.code}`), (current: StoredRoom | null) => {
         if (!current || current.round !== room.round || !current.finished || !current.rematch?.[current.host] || !current.rematch?.[current.guest]) return;
-        return { ...current, round: (current.round ?? 0) + 1, revision: 0, turn: 1, moves: null, finished: 0, timeout: 0, rematch: null, turnStartedAt: serverTimestamp(), turnDelayMs: 0 };
+        return { ...current, round: (current.round ?? 0) + 1, revision: 0, turn: 1, moves: null, finished: 0, timeout: 0, rematch: null, turnStartedAt: serverTimestamp(), turnDelayMs: current.protocol === ROOM_PROTOCOL ? START_COUNTDOWN_MS : 0, ...(current.protocol === ROOM_PROTOCOL ? { startedAt: serverTimestamp() } : {}) };
       }, { applyLocally: false });
     } catch (error) { if (this.room?.round === room.round) this.callbacks.onError(friendlyFirebaseError(error)); }
     finally { this.restarting = false; }

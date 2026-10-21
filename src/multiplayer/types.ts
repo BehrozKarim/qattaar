@@ -17,6 +17,10 @@ export interface RoomView {
   rematchRequested: boolean;
   opponentRequestedRematch: boolean;
   supportsRematch: boolean;
+  supportsReady: boolean;
+  youReady: boolean;
+  opponentReady: boolean;
+  startsAt: number | null;
 }
 
 /** UI depends on this contract, not on a particular realtime provider. */
@@ -25,6 +29,7 @@ export interface MultiplayerSession {
   join(code: string, name: string): Promise<void>;
   move(action: Action): Promise<void>;
   requestRematch(): Promise<void>;
+  markReady(): Promise<void>;
   close(): Promise<void>;
 }
 

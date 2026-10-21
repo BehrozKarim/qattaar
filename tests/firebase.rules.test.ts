@@ -10,14 +10,20 @@ import { ROOM_PROTOCOL } from '../src/multiplayer/room';
 let environment: RulesTestEnvironment;
 const code = 'ABCDEFGH';
 const lease = (uid = 'host', roomCode = code) => ({ uid, code: roomCode, expiresAt: Date.now() + 110_000 });
-const room = () => ({ ruleset: RULESET, host: 'host', guest: '', slot: '0', createdAt: Date.now(), expiresAt: Date.now() + 7_000_000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, round: 0, hostName: 'Host Player', guestName: '', moveSeconds: 0, turnStartedAt: 0, turnDelayMs: 0, finished: 0, timeout: 0 });
+const room = () => ({ ruleset: RULESET, host: 'host', guest: '', slot: '0', createdAt: Date.now(), expiresAt: Date.now() + 7_000_000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, round: 0, hostName: 'Host Player', guestName: '', moveSeconds: 0, turnStartedAt: 0, turnDelayMs: 0, finished: 0, timeout: 0, startedAt: 0 });
 const db = (uid: string) => environment.authenticatedContext(uid).database();
 
 beforeAll(async () => { environment = await initializeTestEnvironment({ projectId: 'demo-qattaar', database: { host: '127.0.0.1', port: 9000, rules: readFileSync('firebase/database.rules.json', 'utf8') } }); });
 beforeEach(async () => { await environment.clearDatabase(); });
 afterAll(async () => { await environment?.cleanup(); });
 
-const joinRoom = (uid = 'guest') => update(ref(db(uid), `rooms/${code}`), { guest: uid, guestName: uid, turnStartedAt: serverTimestamp() });
+const joinOnly = (uid = 'guest') => update(ref(db(uid), `rooms/${code}`), { guest: uid, guestName: uid });
+async function makePlayable(uid = 'guest') {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await update(ref(context.database(), `rooms/${code}`), { startedAt: Date.now() - 4000, turnStartedAt: Date.now(), turnDelayMs: 0, ready: { host: true, [uid]: true } });
+  });
+}
+async function joinRoom(uid = 'guest') { await joinOnly(uid); await makePlayable(uid); }
 
 async function seedRoom() {
   await set(ref(db('host'), 'capacity/0'), lease());
@@ -129,7 +135,7 @@ async function finishByTimeout() {
 }
 async function resetPayload() {
   const current = (await get(ref(db('host'), `rooms/${code}`))).val();
-  return { ...current, round: current.round + 1, revision: 0, turn: 1, finished: 0, timeout: 0, turnStartedAt: serverTimestamp(), turnDelayMs: 0, moves: null, rematch: null };
+  return { ...current, round: current.round + 1, revision: 0, turn: 1, finished: 0, timeout: 0, turnStartedAt: serverTimestamp(), turnDelayMs: 3000, startedAt: serverTimestamp(), moves: null, rematch: null };
 }
 async function submit(uid: string, to: number, turn: number, capture = false) {
   const current = (await get(ref(db(uid), `rooms/${code}`))).val();
@@ -139,7 +145,7 @@ async function submit(uid: string, to: number, turn: number, capture = false) {
 
 describe('names and clocks', () => {
   beforeEach(seedRoom);
-  it('requires a guest name and server start time to join atomically', async () => {
+  it('requires a guest name to join atomically', async () => {
     await assertFails(set(ref(db('guest'), `rooms/${code}/guest`), 'guest'));
     await assertFails(update(ref(db('guest'), `rooms/${code}`), { guest: 'guest', turnStartedAt: serverTimestamp() }));
     await assertFails(set(ref(db('guest'), `rooms/${code}/guestName`), 'Imposter'));
@@ -219,6 +225,7 @@ describe('rematches', () => {
     expect(stored.moves).toBeUndefined(); expect(stored.rematch).toBeUndefined();
     expect((await get(ref(db('host'), 'capacity/0'))).val().code).toBe(code);
     await assertFails(update(ref(db('host'), `rooms/${code}`), { round: 0, 'moves/0': { uid: 'host', action: { type: 'place', to: 0 } }, revision: 1, turn: 2, turnStartedAt: serverTimestamp() }));
+    await makePlayable();
     await assertSucceeds(submit('host', 0, 2));
   });
   it('accepts only one of two competing round resets', async () => {
@@ -229,5 +236,70 @@ describe('rematches', () => {
     const results = await Promise.allSettled(['host', 'guest'].map((uid) => set(ref(db(uid), `rooms/${code}`), fresh)));
     expect(results.filter((value) => value.status === 'fulfilled')).toHaveLength(1);
     expect((await get(ref(db('host'), `rooms/${code}/round`))).val()).toBe(1);
+  });
+});
+
+const readyPlayer = (uid: string) => set(ref(db(uid), `rooms/${code}/ready/${uid}`), true);
+async function startPayload() {
+  const current = (await get(ref(db('host'), `rooms/${code}`))).val();
+  return { ...current, startedAt: serverTimestamp(), turnStartedAt: serverTimestamp(), turnDelayMs: 3000 };
+}
+async function bothPresent() {
+  await set(ref(db('host'), `rooms/${code}/presence/host`), true);
+  await set(ref(db('guest'), `rooms/${code}/presence/guest`), true);
+}
+
+describe('waiting-room readiness', () => {
+  beforeEach(seedRoom);
+  it('joins without starting a timed or untimed game', async () => {
+    await joinOnly();
+    const stored = (await get(ref(db('host'), `rooms/${code}`))).val();
+    expect(stored.startedAt).toBe(0); expect(stored.turnStartedAt).toBe(0);
+    await assertFails(submit('host', 0, 2));
+    await environment.withSecurityRulesDisabled(async (context) => { await set(ref(context.database(), `rooms/${code}/moveSeconds`), 30); });
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { finished: 2, timeout: 1 }));
+  });
+  it('requires each player to consent for themselves', async () => {
+    await joinOnly();
+    await assertFails(set(ref(db('host'), `rooms/${code}/ready/guest`), true));
+    await assertFails(readyPlayer('outsider'));
+    await assertSucceeds(readyPlayer('host'));
+    await assertFails(set(ref(db('host'), `rooms/${code}`), await startPayload()));
+    await assertFails(set(ref(db('host'), `rooms/${code}/ready/host`), false));
+  });
+  it('requires both players present and starts with a server-stamped countdown', async () => {
+    await joinOnly(); await readyPlayer('host'); await readyPlayer('guest');
+    await assertFails(set(ref(db('host'), `rooms/${code}`), await startPayload()));
+    await bothPresent();
+    const payload = await startPayload();
+    await assertFails(set(ref(db('host'), `rooms/${code}`), { ...payload, startedAt: Date.now() + 60000 }));
+    await assertSucceeds(set(ref(db('guest'), `rooms/${code}`), payload));
+    const stored = (await get(ref(db('guest'), `rooms/${code}`))).val();
+    expect(stored.startedAt).toBe(stored.turnStartedAt); expect(stored.turnDelayMs).toBe(3000);
+    await assertFails(submit('host', 0, 2));
+    await assertFails(readyPlayer('host'));
+    await environment.withSecurityRulesDisabled(async (context) => { await set(ref(context.database(), `rooms/${code}/startedAt`), Date.now() - 4000); });
+    await assertSucceeds(submit('host', 0, 2));
+    await assertFails(set(ref(db('host'), `rooms/${code}/startedAt`), serverTimestamp()));
+  });
+  it('accepts just one competing start and cannot restart a live game', async () => {
+    await joinOnly(); await bothPresent(); await readyPlayer('host'); await readyPlayer('guest');
+    const payload = await startPayload();
+    const results = await Promise.allSettled(['host', 'guest'].map((uid) => set(ref(db(uid), `rooms/${code}`), payload)));
+    expect(results.filter((value) => value.status === 'fulfilled')).toHaveLength(1);
+    await assertFails(set(ref(db('host'), `rooms/${code}`), payload));
+  });
+  it('rejects pre-started rooms and pre-filled readiness on creation', async () => {
+    await remove(ref(db('host'), `rooms/${code}`));
+    await assertFails(set(ref(db('host'), `rooms/${code}`), { ...room(), startedAt: serverTimestamp() }));
+    await assertFails(set(ref(db('host'), `rooms/${code}`), { ...room(), ready: { host: true } }));
+  });
+  it('preserves existing protocol-two joins, moves, and clocks', async () => {
+    const { startedAt, ...legacy } = room();
+    expect(startedAt).toBe(0);
+    await environment.withSecurityRulesDisabled(async (context) => { await set(ref(context.database(), `rooms/${code}`), { ...legacy, protocol: 2 }); });
+    await assertSucceeds(update(ref(db('guest'), `rooms/${code}`), { guest: 'guest', guestName: 'Guest', turnStartedAt: serverTimestamp() }));
+    await assertSucceeds(update(ref(db('host'), `rooms/${code}`), { 'moves/0': { uid: 'host', action: { type: 'place', to: 0 } }, revision: 1, turn: 2, finished: 0, turnStartedAt: serverTimestamp() }));
+    await assertFails(readyPlayer('host'));
   });
 });

@@ -3,10 +3,10 @@ import { applyAction, RULESET } from '../game/engine';
 import type { Action } from '../game/engine';
 import { CAPTURE_FEEDBACK_MS } from '../game/feedback';
 import { randomPlayerName } from '../hooks/usePlayerName';
-import { replayRoom, ROOM_PROTOCOL, turnDeadline, validName } from './room';
+import { replayRoom, ROOM_PROTOCOL, scheduledStart, START_COUNTDOWN_MS, turnDeadline, validName } from './room';
 import type { StoredRoom } from './room';
 
-const room = (): StoredRoom => ({ ruleset: RULESET, host: 'host', guest: 'guest', slot: '0', createdAt: 0, expiresAt: 7200000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, round: 0, hostName: 'Behroz', guestName: 'Swift Falcon', moveSeconds: 30, turnStartedAt: 1000, turnDelayMs: 0, finished: 0, timeout: 0 });
+const room = (): StoredRoom => ({ ruleset: RULESET, host: 'host', guest: 'guest', slot: '0', createdAt: 0, expiresAt: 7200000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, round: 0, hostName: 'Behroz', guestName: 'Swift Falcon', moveSeconds: 30, turnStartedAt: 1000, turnDelayMs: 0, finished: 0, timeout: 0, startedAt: 1, ready: { host: true, guest: true } });
 function move(current: StoredRoom, action: Action, now: number) {
   const state = replayRoom(current); const next = applyAction(state, action);
   return { ...current, moves: { ...current.moves, [current.revision]: { uid: state.turn === 1 ? current.host : current.guest, action } }, revision: current.revision + 1, turn: next.turn, turnStartedAt: next.turn === state.turn ? current.turnStartedAt : now, turnDelayMs: next.turn === state.turn ? current.turnDelayMs : action.type === 'capture' ? CAPTURE_FEEDBACK_MS : 0, finished: next.winner };
@@ -18,10 +18,24 @@ describe('named timed rooms', () => {
     for (const invalid of ['', '   ', 'a'.repeat(21), 'a\nb']) expect(validName(invalid)).toBe(false);
     for (let i = 0; i < 20; i++) expect(validName(randomPlayerName())).toBe(true);
   });
-  it('starts the clock only after joining, with an optional unlimited mode', () => {
+  it('starts the clock only after readiness, with an optional unlimited mode', () => {
     expect(turnDeadline({ ...room(), guest: '', guestName: '', turnStartedAt: 0 })).toBeNull();
     expect(turnDeadline({ ...room(), moveSeconds: 0 })).toBeNull();
     expect(turnDeadline(room())).toBe(31000);
+    expect(turnDeadline({ ...room(), startedAt: 0, turnStartedAt: 0 })).toBeNull();
+  });
+  it('schedules three seconds before play and includes that delay in the first turn', () => {
+    const current = { ...room(), startedAt: 1000, turnStartedAt: 1000, turnDelayMs: START_COUNTDOWN_MS };
+    expect(scheduledStart(current)).toBe(4000);
+    expect(turnDeadline(current)).toBe(34000);
+    expect(() => replayRoom({ ...current, ready: { host: true } })).toThrow('invalid start');
+    expect(() => replayRoom({ ...current, startedAt: 0 })).toThrow('invalid start');
+  });
+  it('continues protocol-two clocks without readiness or a countdown', () => {
+    const current = { ...room(), protocol: 2, startedAt: undefined, ready: undefined };
+    expect(scheduledStart(current)).toBeNull();
+    expect(turnDeadline(current)).toBe(31000);
+    expect(replayRoom(current).ply).toBe(0);
   });
   it('shares the clock between a mill and its capture, then allows time for capture feedback', () => {
     let current = room();
