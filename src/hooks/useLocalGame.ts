@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { applyAction, createGame, RULESET } from '../game/engine';
 import { CAPTURE_FEEDBACK_MS, MILL_PREVIEW_MS } from '../game/feedback';
+import { DEFAULT_VARIANT, VARIANTS, variantFromRuleset } from '../game/variants';
+import type { Variant } from '../game/variants';
 import type { Action } from '../game/engine';
 import type { Difficulty } from '../game/ai';
 
@@ -13,23 +15,25 @@ function restore(): SavedGame {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedGame | null;
     if (!value || !['ai', 'local'].includes(value.mode) || !['easy', 'medium', 'hard'].includes(value.difficulty) || !Array.isArray(value.actions) || value.actions.length > 2000) return fallback;
-    try { value.actions.reduce(applyAction, createGame()); }
+    const variant = variantFromRuleset(value.ruleset ?? RULESET) ?? DEFAULT_VARIANT;
+    try { value.actions.reduce(applyAction, createGame(variant)); }
     catch {
       localStorage.setItem('qattaar.game.legacy-rules', JSON.stringify(value));
       return { ...fallback, notice: 'Your old game used different rules and was saved separately. This new game uses Balochi Qattaar: adjacent moves only.' };
     }
-    return { ...value, id: value.id ?? crypto.randomUUID(), ruleset: RULESET };
+    return { ...value, id: value.id ?? crypto.randomUUID(), ruleset: VARIANTS[variant].ruleset };
   } catch { return fallback; }
 }
 
 export function useLocalGame(active: boolean) {
   const [saved, setSaved] = useState(restore);
   const [failedPly, setFailedPly] = useState<number | null>(null);
+  const variant = variantFromRuleset(saved.ruleset) ?? DEFAULT_VARIANT;
   const history = useMemo(() => {
-    const states = [createGame()];
+    const states = [createGame(variant)];
     for (const action of saved.actions) states.push(applyAction(states[states.length - 1], action));
     return states;
-  }, [saved.actions]);
+  }, [saved.actions, variant]);
   const state = history[history.length - 1];
   const aiTurn = active && saved.mode === 'ai' && state.turn === 2 && !state.winner;
   const thinking = Boolean(aiTurn && failedPly !== state.ply);
@@ -54,6 +58,6 @@ export function useLocalGame(active: boolean) {
     if (saved.mode === 'ai') while (length > 0 && (history[length].turn !== 1 || history[length].capture)) length--;
     setSaved((current) => ({ ...current, actions: current.actions.slice(0, Math.max(0, length)) }));
   };
-  const reset = (mode = saved.mode, difficulty = saved.difficulty) => { setSaved({ id: crypto.randomUUID(), ruleset: RULESET, mode, difficulty, actions: [] }); setFailedPly(null); };
-  return { state, gameId: saved.id, notice: saved.notice, mode: saved.mode, difficulty: saved.difficulty, move, undo, reset, thinking, aiError, canUndo: saved.actions.length > 0 };
+  const reset = (mode = saved.mode, difficulty = saved.difficulty, nextVariant: Variant = variant) => { setSaved({ id: crypto.randomUUID(), ruleset: VARIANTS[nextVariant].ruleset, mode, difficulty, actions: [] }); setFailedPly(null); };
+  return { state, variant, gameId: saved.id, notice: saved.notice, mode: saved.mode, difficulty: saved.difficulty, move, undo, reset, thinking, aiError, canUndo: saved.actions.length > 0 };
 }

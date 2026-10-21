@@ -5,6 +5,16 @@ import type { Capture, GameState, Player } from './engine';
 export const CAPTURE_FEEDBACK_MS = 1800;
 export const MILL_PREVIEW_MS = 1000;
 
+export function opponentTurn(state: GameState, viewer: Player | null) {
+  const player = opponent(viewer ?? state.turn);
+  const turn = state.lastTurns[player - 1];
+  if (!turn) return null;
+  const name = playerName(player);
+  const action = turn.action;
+  const detail = action.type === 'move' ? `${name}: ${pointName(action.from)} → ${pointName(action.to)}` : `${name} placed at ${pointName(action.to)}`;
+  return { player, turn, title: viewer ? 'Opponent’s last move' : `${name}’s last move`, detail: `${detail}${turn.capturedAt === undefined ? '' : ` · captured at ${pointName(turn.capturedAt)}`}` };
+}
+
 export function captureMessage(capture: Capture, viewer: Player | null) {
   const color = playerName(capture.player).toLowerCase();
   const title = viewer === capture.player ? 'Your piece was captured' : viewer === capture.by ? 'You captured a piece' : `${playerName(capture.by)} captured a piece`;

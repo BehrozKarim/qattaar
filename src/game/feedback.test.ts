@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createGame } from './engine';
-import { captureMessage, matchResult } from './feedback';
+import { applyAction, createGame } from './engine';
+import { captureMessage, matchResult, opponentTurn } from './feedback';
 
 describe('match feedback', () => {
   it('names the captured color and coordinate from each player’s perspective', () => {
@@ -22,5 +22,18 @@ describe('match feedback', () => {
     expect(matchResult(createGame(), 1)).toBeNull();
     expect(matchResult({ ...createGame(), winner: 3, endReason: 'repetition' }, 1)?.detail).toContain('three times');
     expect(matchResult({ ...createGame(), winner: 3, endReason: 'no-capture' }, 1)?.detail).toContain('50 full moves');
+  });
+  it('keeps the opponent’s last move visible after the viewer plays', () => {
+    let game = createGame();
+    for (const to of [0, 3, 1]) game = applyAction(game, { type: 'place', to });
+    expect(opponentTurn(game, 1)).toMatchObject({ player: 2, title: 'Opponent’s last move', detail: 'Black placed at b6' });
+    expect(opponentTurn(game, 2)?.detail).toBe('White placed at d7');
+    expect(opponentTurn(game, null)?.player).toBe(1);
+    expect(opponentTurn(createGame(), 1)).toBeNull();
+  });
+  it('describes an origin, destination, and capture from the same turn', () => {
+    const state = createGame();
+    state.lastTurns[1] = { action: { type: 'move', from: 1, to: 4 }, capturedAt: 3, ply: 22 };
+    expect(opponentTurn(state, 1)?.detail).toBe('Black: d7 → d6 · captured at b6');
   });
 });

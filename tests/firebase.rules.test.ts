@@ -4,6 +4,7 @@ import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebas
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { get, ref, remove, runTransaction, set, update } from 'firebase/database';
 import { RULESET } from '../src/game/engine';
+import { VARIANTS } from '../src/game/variants';
 
 let environment: RulesTestEnvironment;
 const code = 'ABCDEFGH';
@@ -48,6 +49,12 @@ describe('room reservations', () => {
     expect(omitted).toBe(RULESET);
     await assertFails(set(ref(db('host'), `rooms/${code}`), legacyRoom));
   });
+  it('allows creating and playing a Classic room', async () => {
+    await set(ref(db('host'), 'capacity/0'), lease());
+    await assertSucceeds(set(ref(db('host'), `rooms/${code}`), { ...room(), ruleset: VARIANTS.classic.ruleset }));
+    await set(ref(db('guest'), `rooms/${code}/guest`), 'guest');
+    await assertSucceeds(update(ref(db('host'), `rooms/${code}`), { 'moves/0': { uid: 'host', action: { type: 'place', to: 0 } }, revision: 1, turn: 2 }));
+  });
   it('allows reclaiming expired reservations and deleting the abandoned room', async () => {
     await seedRoom();
     await environment.withSecurityRulesDisabled(async (context) => { await update(ref(context.database(), 'capacity/0'), { expiresAt: Date.now() - 1 }); });
@@ -82,6 +89,7 @@ describe('membership and moves', () => {
     await update(ref(db('host'), `rooms/${code}`), { 'moves/0': { uid: 'host', action: { type: 'place', to: 0 } }, revision: 1, turn: 2 });
     await assertFails(set(ref(db('guest'), `rooms/${code}/host`), 'guest'));
     await assertFails(set(ref(db('host'), `rooms/${code}/ruleset`), 'morris-flying'));
+    await assertFails(set(ref(db('host'), `rooms/${code}/ruleset`), VARIANTS.classic.ruleset));
     await assertFails(remove(ref(db('host'), `rooms/${code}/ruleset`)));
     await assertFails(set(ref(db('host'), `rooms/${code}/unexpected`), true));
     await assertFails(remove(ref(db('guest'), `rooms/${code}/moves/0`)));

@@ -5,9 +5,10 @@ import '../../src/styles.css';
 import { Board } from '../../src/components/Board';
 import { MatchPlayers } from '../../src/components/MatchPlayers';
 import { MatchResult } from '../../src/components/MatchResult';
+import { LastMoveNotice } from '../../src/components/LastMoveNotice';
 import { applyAction, createGame, instruction } from '../../src/game/engine';
 import type { Cell, GameState, Player } from '../../src/game/engine';
-import { captureMessage, matchResult } from '../../src/game/feedback';
+import { captureMessage, matchResult, opponentTurn } from '../../src/game/feedback';
 import { useCaptureFeedback } from '../../src/hooks/useCaptureFeedback';
 
 function position(white: number[], black: number[], extras: Partial<GameState> = {}): GameState {
@@ -21,6 +22,9 @@ const scenarios = {
   victory: { label: 'Winning capture', state: position([0, 1, 2, 21], [3, 5, 6], { capture: true }) },
   blockedWin: { label: 'Win by blocking', state: position([1, 4, 7, 9, 10, 11, 20], [0, 3, 6]) },
   blockedLoss: { label: 'Lose by blocking', state: position([0, 3, 6], [1, 4, 7, 9, 10, 11, 20], { turn: 2 }) },
+  movement: { label: 'Opponent moves', state: position([2, 5, 8, 14], [0, 3, 6, 9], { turn: 2 }) },
+  balochiThree: { label: 'Balochi three pieces', state: position([2, 5, 8, 14], [0, 3, 6], { turn: 2 }) },
+  classicThree: { label: 'Classic three pieces', state: position([2, 5, 8, 14], [0, 3, 6], { turn: 2, variant: 'classic' }) },
 };
 type Scenario = keyof typeof scenarios;
 
@@ -30,12 +34,14 @@ function Table({ scenario, viewer }: { scenario: Scenario; viewer: Player | null
   const feedback = useCaptureFeedback(state, scenario);
   const result = matchResult(state, viewer);
   const message = state.lastCapture ? captureMessage(state.lastCapture, viewer) : null;
+  const lastTurn = opponentTurn(state, viewer);
   return <section className="play-area" style={{ margin: '20px auto' }}>
     <MatchPlayers state={state} mode={viewer === null ? 'local' : 'ai'} room={null} difficulty="easy" thinking={false} captureFeedback={feedback} />
     <div className={`turn-status ${feedback ? 'capture-status' : ''}`} role="status" aria-live="polite"><div><h2>{feedback ? message?.title : result?.title ?? 'Feedback test'}</h2><p>{feedback ? message?.detail : result?.detail ?? instruction(state)}</p></div></div>
-    <Board state={state} enabled={!feedback} captureFeedback={feedback} onMove={(action) => setState(applyAction(state, action))}>
+    <Board state={state} enabled={!feedback} captureFeedback={feedback} lastTurn={lastTurn} onMove={(action) => setState(applyAction(state, action))}>
       {result && !feedback && !dismissed && <MatchResult result={result} online={false} onAgain={() => { setDismissed(false); setState(scenarios[scenario].state); }} onDismiss={() => setDismissed(true)} />}
     </Board>
+    {lastTurn && <LastMoveNotice move={lastTurn} />}
     {message && <p className="capture-history">Last capture · {message.detail}</p>}
     <p>Action count: {state.ply}</p>
   </section>;

@@ -1,14 +1,17 @@
 import { MILLS, NEIGHBORS, pointName } from './board';
-import ruleset from './ruleset.json';
+import { DEFAULT_VARIANT, VARIANTS } from './variants';
+import type { Variant } from './variants';
 
-export const RULESET = ruleset.id;
+export const RULESET = VARIANTS[DEFAULT_VARIANT].ruleset;
 
 export type Player = 1 | 2;
 export type Cell = 0 | Player;
 export type Action = { type: 'place'; to: number } | { type: 'move'; from: number; to: number } | { type: 'capture'; at: number };
 export interface Capture { at: number; player: Player; by: Player; ply: number }
+export interface TurnRecord { action: Exclude<Action, { type: 'capture' }>; capturedAt?: number; ply: number }
 export type EndReason = 'pieces' | 'blocked' | 'repetition' | 'no-capture';
 export interface GameState {
+  variant: Variant;
   board: Cell[];
   reserves: [number, number];
   turn: Player;
@@ -19,6 +22,7 @@ export interface GameState {
   repetitions: Record<string, number>;
   lastAction: string;
   lastMove: { action: Action; player: Player } | null;
+  lastTurns: [TurnRecord | null, TurnRecord | null];
   lastCapture: Capture | null;
   endReason: EndReason | null;
 }
@@ -29,12 +33,13 @@ export const stoneCount = (state: GameState, player: Player): number => state.bo
 export const inMill = (board: Cell[], point: number): boolean => board[point] !== 0 && MILLS.some((mill) => mill.includes(point as never) && mill.every((p) => board[p] === board[point]));
 const positionKey = (state: GameState): string => `${state.board.join('')}_${state.turn}_${state.reserves.join('')}`;
 
-export function createGame(): GameState {
-  return { board: Array<Cell>(24).fill(0), reserves: [9, 9], turn: 1, capture: false, winner: 0, ply: 0, quietTurns: 0, repetitions: {}, lastAction: 'A new game begins.', lastMove: null, lastCapture: null, endReason: null };
+export function createGame(variant: Variant = DEFAULT_VARIANT): GameState {
+  return { variant, board: Array<Cell>(24).fill(0), reserves: [9, 9], turn: 1, capture: false, winner: 0, ply: 0, quietTurns: 0, repetitions: {}, lastAction: 'A new game begins.', lastMove: null, lastTurns: [null, null], lastCapture: null, endReason: null };
 }
 
-export function phase(state: GameState): 'placing' | 'moving' {
-  return state.reserves.some((n) => n > 0) ? 'placing' : 'moving';
+export function phase(state: GameState): 'placing' | 'moving' | 'flying' {
+  if (state.reserves.some((n) => n > 0)) return 'placing';
+  return state.variant === 'classic' && stoneCount(state, state.turn) === 3 ? 'flying' : 'moving';
 }
 
 export function legalActions(state: GameState): Action[] {
@@ -47,7 +52,7 @@ export function legalActions(state: GameState): Action[] {
   }
   if (state.reserves[state.turn - 1] > 0) return empty.map((to) => ({ type: 'place', to }));
   return state.board.flatMap((cell, from) => cell === state.turn
-    ? NEIGHBORS[from].filter((to) => state.board[to] === 0).map((to) => ({ type: 'move' as const, from, to }))
+    ? (phase(state) === 'flying' ? empty : NEIGHBORS[from].filter((to) => state.board[to] === 0)).map((to) => ({ type: 'move' as const, from, to }))
     : []);
 }
 
@@ -59,15 +64,18 @@ export function sameAction(a: Action, b: Action): boolean {
 
 export function applyAction(state: GameState, action: Action): GameState {
   if (!legalActions(state).some((candidate) => sameAction(candidate, action))) throw new Error('That move is not allowed.');
-  const next: GameState = { ...state, board: [...state.board], reserves: [...state.reserves], repetitions: { ...state.repetitions }, ply: state.ply + 1, lastMove: { action, player: state.turn } };
+  const next: GameState = { ...state, board: [...state.board], reserves: [...state.reserves], lastTurns: [...state.lastTurns], repetitions: { ...state.repetitions }, ply: state.ply + 1, lastMove: { action, player: state.turn } };
   const name = playerName(state.turn);
   if (action.type === 'capture') {
     next.board[action.at] = 0;
     next.capture = false;
     next.quietTurns = 0;
     next.lastCapture = { at: action.at, player: opponent(state.turn), by: state.turn, ply: next.ply };
+    const turn = next.lastTurns[state.turn - 1];
+    if (turn) next.lastTurns[state.turn - 1] = { ...turn, capturedAt: action.at };
     next.lastAction = `${name} captured a ${playerName(opponent(state.turn)).toLowerCase()} piece at ${pointName(action.at)}.`;
   } else {
+    next.lastTurns[state.turn - 1] = { action, ply: next.ply };
     next.board[action.to] = state.turn;
     if (action.type === 'place') {
       next.reserves[state.turn - 1]--;
@@ -99,5 +107,6 @@ export function instruction(state: GameState): string {
   if (state.winner) return `${playerName(state.winner)} wins the game.`;
   if (state.capture) return 'Three in a row! Choose an opponent’s piece to capture.';
   if (phase(state) === 'placing') return 'Place a piece on an empty point.';
-  return 'Move to an adjacent empty point, even with three pieces.';
+  if (phase(state) === 'flying') return 'Three pieces left: fly to any empty point.';
+  return state.variant === 'balochi' ? 'Move to an adjacent empty point, even with three pieces.' : 'Move a piece to an adjacent empty point.';
 }

@@ -120,4 +120,48 @@ describe('AI', () => {
     expect(action?.type).toBe('move');
     if (action?.type === 'move') expect(NEIGHBORS[action.from]).toContain(action.to);
   });
+  it.each(['easy', 'medium', 'hard'] as const)('%s can fly out of a blocked three-piece position in Classic', (level) => {
+    const game = position([0, 3, 6], [1, 4, 7, 9, 10, 11, 20], { variant: 'classic' });
+    const action = chooseAction(game, level, () => 0.9);
+    expect(legalActions(game)).toContainEqual(action);
+    expect(action?.type).toBe('move');
+    if (action?.type === 'move') expect(NEIGHBORS[action.from]).not.toContain(action.to);
+  });
+});
+
+describe('Classic Nine Men’s Morris', () => {
+  it.each([1, 2] as Player[])('player %s may fly to any empty point with exactly three pieces', (player) => {
+    const game = position(player === 1 ? [0, 3, 6] : [2, 5, 8, 14], player === 1 ? [2, 5, 8, 14] : [0, 3, 6], { variant: 'classic', turn: player });
+    expect(phase(game)).toBe('flying');
+    expect(applyAction(game, { type: 'move', from: 0, to: 23 }).board[23]).toBe(player);
+    expect(() => applyAction(game, { type: 'move', from: 0, to: 2 })).toThrow();
+  });
+  it('requires adjacency with four pieces', () => {
+    const game = position([0, 3, 6, 9], [2, 5, 8, 14], { variant: 'classic' });
+    expect(phase(game)).toBe('moving');
+    expect(() => applyAction(game, { type: 'move', from: 0, to: 23 })).toThrow();
+  });
+  it('does not award a blocked win when the next player can fly', () => {
+    const game = position([1, 4, 7, 9, 10, 11, 20], [0, 3, 6], { variant: 'classic' });
+    const next = applyAction(game, { type: 'move', from: 20, to: 19 });
+    expect(next.winner).toBe(0); expect(legalActions(next).length).toBeGreaterThan(0);
+  });
+  it('still awards a win for blocking four opposing pieces', () => {
+    const game = position([1, 9, 4, 10, 7, 11, 22, 20], [0, 3, 6, 21], { variant: 'classic' });
+    const next = applyAction(game, { type: 'move', from: 20, to: 19 });
+    expect(next.winner).toBe(1); expect(next.endReason).toBe('blocked');
+  });
+});
+
+describe('last-turn history', () => {
+  it('keeps a mill’s placement and capture together without mutating earlier states', () => {
+    let game = createGame();
+    for (const to of [0, 3, 1, 5, 2]) game = applyAction(game, { type: 'place', to });
+    const captured = applyAction(game, { type: 'capture', at: 3 });
+    expect(captured.lastTurns[0]).toEqual({ action: { type: 'place', to: 2 }, ply: 5, capturedAt: 3 });
+    expect(game.lastTurns[0]?.capturedAt).toBeUndefined();
+    const next = applyAction(captured, { type: 'place', to: 6 });
+    expect(next.lastTurns[0]).toEqual(captured.lastTurns[0]);
+    expect(next.lastTurns[1]?.action).toEqual({ type: 'place', to: 6 });
+  });
 });

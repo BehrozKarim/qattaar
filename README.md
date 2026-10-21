@@ -1,6 +1,6 @@
 # Qattaar
 
-Balochi Qattaar, a game in the Nine Men's Morris family. A browser game with local two-player play, three AI difficulties, and private online rooms.
+Qattaar, a browser game offering Balochi Qattaar and Classic Nine Men's Morris, with local two-player play, three AI difficulties, and private online rooms.
 
 ## Run locally
 
@@ -13,7 +13,11 @@ npm run dev
 
 Open the localhost URL printed by Vite. Local games and AI work immediately without Firebase. Games save automatically on this device. The production build caches its assets after the first successful visit so local play and AI can work without an internet connection.
 
-The board uses White and Black pieces on a sand-colored surface. On phones it fills the available width, with compact player and game controls above it. During the movement phase, drag a piece onto an adjacent empty point, or tap the piece and then its destination. Mouse, pen, and touch use Pointer Events; keyboard players can use Tab and Enter. Invalid drops keep the original position. Dragging is disabled during placement, capture, the opponent's turn, and finished games. Scroll and pinch zoom remain available away from movable pieces.
+The board uses White and Black pieces on a sand-colored surface. On phones it fills the available width, with compact player and game controls above it. During the movement phase, drag a piece onto a legal empty point, or tap the piece and then its destination. Mouse, pen, and touch use Pointer Events; keyboard players can use Tab and Enter. Invalid drops keep the original position. Dragging is disabled during placement, capture, the opponent's turn, and finished games. Scroll and pinch zoom remain available away from movable pieces.
+
+Choose **Balochi** or **Classic** under Game rules. Balochi is the default and always requires adjacent moves. Classic allows flying to any empty point with exactly three pieces remaining. The choice applies to AI and pass-and-play, saves with the match, and is retained when starting another game. Changing rules during a match asks to start a new game. Online hosts choose before creating the room; guests automatically use the room's rules, which stay locked for the match.
+
+A blue ring marks the opponent's last placement or destination. For movement, a hollow origin marker and dashed arrow show the route. The description below the board names the color and coordinates and includes any capture from the same turn. The opponent's markers remain after your own move until the opponent moves again. In pass-and-play, markers follow the opponent of the player whose turn it is. Replaying a saved game, undoing, and reconnecting rebuild these markers from the action history.
 
 A capture marks the removed piece's location with a crossed-out piece and a −1 badge for 1.8 seconds. The turn message identifies whose piece was taken and where, the affected player card highlights, and the last-capture message remains below the board. Input pauses while the capture is shown; AI waits after a capture and briefly shows a new mill before choosing its capture. Reduced-motion settings keep the marker static. Finished games show a large win/loss/draw panel with the reason, Play again, and View board controls.
 
@@ -22,7 +26,7 @@ npm run check       # lint, rules-engine/protocol tests, TypeScript, production 
 npm run preview     # serve the production build
 ```
 
-For repeatable browser checks of captures, winning captures, and blocked-player wins/losses, start the dev server and open `/tests/fixtures/feedback.html`. The fixture uses the real engine, board, capture hook, and result component. It is excluded from the production bundle.
+For repeatable browser checks of captures, winning captures, blocked-player wins/losses, last-move trails, and three-piece movement in both variants, start the dev server and open `/tests/fixtures/feedback.html`. The fixture uses the real engine, board, capture hook, and result component. It is excluded from the production bundle.
 
 ## Enable online rooms with Firebase Spark
 
@@ -82,9 +86,9 @@ See [Firebase plan behavior](https://firebase.google.com/docs/projects/billing/f
 
 ## Rules and architecture
 
-The game follows Balochi Qattaar: placement, one capture per formed mill, protected mills, and **adjacent movement even with only three pieces**. There is no flying. After placement, a player loses when they have fewer than three pieces or cannot make any legal move. A position repeated three times, or 50 full moves without a capture after placement, is a draw. The in-game rules explain these conditions.
+Both variants use placement, one capture per formed mill, and protected mills. Balochi Qattaar requires **adjacent movement even with only three pieces**. Classic Nine Men's Morris allows flying to any empty point with exactly three pieces; otherwise moves stay adjacent. After placement, a player loses when they have fewer than three pieces or cannot make any legal move under the selected rules. A position repeated three times, or 50 full moves without a capture after placement, is a draw. The in-game rules describe the selected variant.
 
-`src/game/ruleset.json` identifies the shared rules version. New rooms carry this version; clients reject rooms with different rules. When updating from the earlier flying-rules version, publish the updated Firebase database rules as well as the frontend, and create fresh rooms. Local saved action histories replay under the current rules; an incompatible history is backed up under `qattaar.game.legacy-rules` in local storage and a new game starts with an explanation.
+`src/game/ruleset.json` identifies the supported rule versions, mapped to variants in `src/game/variants.ts`. Each room carries its host's selected ruleset; clients reject unsupported versions. Publish the updated Firebase database rules as well as the frontend when adding Classic rooms. Existing `balochi-v1` rooms and saved games remain compatible. Local saved action histories replay under their saved variant; an incompatible history is backed up under `qattaar.game.legacy-rules` in local storage and a new game starts with an explanation.
 
 ```text
 src/game/          Pure board topology, rules, and AI search; no React or Firebase

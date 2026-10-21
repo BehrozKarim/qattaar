@@ -2,7 +2,9 @@ import { initializeApp, getApps } from 'firebase/app';
 import { browserSessionPersistence, connectAuthEmulator, getAuth, setPersistence, signInAnonymously } from 'firebase/auth';
 import { connectDatabaseEmulator, get, getDatabase, goOffline, goOnline, onDisconnect, onValue, ref, remove, runTransaction, set, update } from 'firebase/database';
 import type { Database, Unsubscribe } from 'firebase/database';
-import { applyAction, createGame, RULESET } from '../game/engine';
+import { applyAction, createGame } from '../game/engine';
+import { VARIANTS, variantFromRuleset } from '../game/variants';
+import type { Variant } from '../game/variants';
 import type { Action, Player } from '../game/engine';
 import type { MultiplayerSession, RoomView, SessionCallbacks } from './types';
 
@@ -36,9 +38,10 @@ export interface StoredRoom {
 
 /** Replay is the single source of truth; clients never trust a remote board snapshot. */
 export function replayRoom(room: StoredRoom) {
-  if (room.ruleset !== RULESET) throw new Error('This room uses different rules. Both players should refresh and create a new room.');
+  const variant = variantFromRuleset(room.ruleset);
+  if (!variant) throw new Error('This room uses different rules. Both players should refresh and create a new room.');
   if (!Number.isInteger(room.revision) || room.revision < 0 || room.revision > 2000) throw new Error('This room has an invalid move history.');
-  let state = createGame();
+  let state = createGame(variant);
   for (let i = 0; i < room.revision; i++) {
     const move = room.moves?.[i];
     if (!move || move.uid !== (state.turn === 1 ? room.host : room.guest)) throw new Error('This room has an invalid move history.');
@@ -103,7 +106,7 @@ class FirebaseSession implements MultiplayerSession {
     if (this.stopped) throw new Error('Connection cancelled.');
   }
 
-  async create() {
+  async create(variant: Variant) {
     await this.connect();
     const offset = crypto.getRandomValues(new Uint8Array(1))[0] % ROOM_LIMIT;
     for (let i = 0; i < ROOM_LIMIT; i++) {
@@ -126,7 +129,7 @@ class FirebaseSession implements MultiplayerSession {
       if (oldCode) await remove(ref(this.db, `rooms/${oldCode}`));
       const now = Date.now() + this.clockOffset;
       await set(ref(this.db, `rooms/${code}`), {
-        ruleset: RULESET, host: this.uid, guest: '', slot, createdAt: now, expiresAt: now + ROOM_MS, revision: 0, turn: 1,
+        ruleset: VARIANTS[variant].ruleset, host: this.uid, guest: '', slot, createdAt: now, expiresAt: now + ROOM_MS, revision: 0, turn: 1,
       } satisfies StoredRoom);
       await this.watch();
       return;

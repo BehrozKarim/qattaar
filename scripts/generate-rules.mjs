@@ -1,13 +1,14 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { URL } from 'node:url';
 
-const ruleset = JSON.parse(readFileSync(new URL('../src/game/ruleset.json', import.meta.url), 'utf8')).id;
+const rulesets = JSON.parse(readFileSync(new URL('../src/game/ruleset.json', import.meta.url), 'utf8'));
+const supportedRuleset = (path) => `(${[rulesets.id, rulesets.classicId].map((id) => `${path}.val() === '${id}'`).join(' || ')})`;
 
 // Generate repeated policy expressions once; commit the deployable JSON artifact.
 const room = "root.child('rooms').child($code)";
 const member = `auth != null && (auth.uid === ${room}.child('host').val() || auth.uid === ${room}.child('guest').val())`;
 const lease = `root.child('capacity').child(${room}.child('slot').val())`;
-const actor = `${member} && ${room}.child('ruleset').val() === '${ruleset}' && ${room}.child('guest').val() !== '' && auth.uid === (${room}.child('turn').val() === 1 ? ${room}.child('host').val() : ${room}.child('guest').val()) && ${lease}.child('code').val() === $code && ${lease}.child('expiresAt').val() > now && ${room}.child('expiresAt').val() > now`;
+const actor = `${member} && ${supportedRuleset(`${room}.child('ruleset')`)} && ${room}.child('guest').val() !== '' && auth.uid === (${room}.child('turn').val() === 1 ? ${room}.child('host').val() : ${room}.child('guest').val()) && ${lease}.child('code').val() === $code && ${lease}.child('expiresAt').val() > now && ${room}.child('expiresAt').val() > now`;
 const integerPoint = { '.validate': 'newData.isNumber() && newData.val() >= 0 && newData.val() < 24 && newData.val() % 1 === 0' };
 const rules = {
   rules: {
@@ -28,7 +29,7 @@ const rules = {
         '.read': 'auth != null',
         '.write': "auth != null && ((!data.exists() && newData.exists() && newData.child('host').val() === auth.uid && root.child('capacity').child(newData.child('slot').val()).child('uid').val() === auth.uid && root.child('capacity').child(newData.child('slot').val()).child('code').val() === $code && root.child('capacity').child(newData.child('slot').val()).child('expiresAt').val() > now) || (data.exists() && !newData.exists() && (data.child('host').val() === auth.uid || root.child('capacity').child(data.child('slot').val()).child('code').val() !== $code || data.child('expiresAt').val() <= now)))",
         '.validate': "newData.hasChildren(['ruleset','host','guest','slot','createdAt','expiresAt','revision','turn']) && ((!data.exists() && newData.child('revision').val() === 0 && newData.child('turn').val() === 1 && newData.child('guest').val() === '' && !newData.child('moves').exists() && !newData.child('presence').exists()) || (data.exists() && ((newData.child('revision').val() === data.child('revision').val() && newData.child('turn').val() === data.child('turn').val() && !newData.child('moves').child(data.child('revision').val()+'').exists()) || (newData.child('revision').val() === data.child('revision').val()+1 && newData.child('moves').child(data.child('revision').val()+'').exists()))))",
-        ruleset: { '.validate': `newData.val() === '${ruleset}' && (!data.exists() || newData.val() === data.val())` },
+        ruleset: { '.validate': `${supportedRuleset('newData')} && (!data.exists() || newData.val() === data.val())` },
         host: { '.validate': "newData.isString() && ((!data.exists() && newData.val() === auth.uid) || newData.val() === data.val())" },
         slot: { '.validate': 'newData.isString() && newData.val().matches(/^([0-9]|[12][0-9]|3[0-9])$/) && (!data.exists() || newData.val() === data.val())' },
         createdAt: { '.validate': 'newData.isNumber() && ((!data.exists() && newData.val() <= now + 10000 && newData.val() >= now - 60000) || newData.val() === data.val())' },

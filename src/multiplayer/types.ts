@@ -1,4 +1,5 @@
 import type { Action, GameState, Player } from '../game/engine';
+import type { Variant } from '../game/variants';
 
 export interface RoomView {
   code: string;
@@ -11,7 +12,7 @@ export interface RoomView {
 
 /** UI depends on this contract, not on a particular realtime provider. */
 export interface MultiplayerSession {
-  create(): Promise<void>;
+  create(variant: Variant): Promise<void>;
   join(code: string): Promise<void>;
   move(action: Action): Promise<void>;
   close(): Promise<void>;
