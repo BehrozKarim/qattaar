@@ -1,0 +1,27 @@
+import { pointName } from './board';
+import { opponent, playerName } from './engine';
+import type { Capture, GameState, Player } from './engine';
+
+export const CAPTURE_FEEDBACK_MS = 1800;
+export const MILL_PREVIEW_MS = 1000;
+
+export function captureMessage(capture: Capture, viewer: Player | null) {
+  const color = playerName(capture.player).toLowerCase();
+  const title = viewer === capture.player ? 'Your piece was captured' : viewer === capture.by ? 'You captured a piece' : `${playerName(capture.by)} captured a piece`;
+  return { title, detail: `${playerName(capture.by)} took ${viewer === capture.player ? 'your' : 'a'} ${color} piece at ${pointName(capture.at)}.` };
+}
+
+export function matchResult(state: GameState, viewer: Player | null) {
+  if (!state.winner) return null;
+  if (state.winner === 3) return {
+    outcome: 'draw' as const, title: 'It’s a draw',
+    detail: state.endReason === 'repetition' ? 'The same position occurred three times.' : 'Neither player captured a piece for 50 full moves.',
+  };
+  const loser = opponent(state.winner);
+  const subject = viewer === loser ? 'You have' : `${playerName(loser)} has`;
+  const outcome = viewer === null || viewer === state.winner ? 'win' as const : 'loss' as const;
+  const title = viewer === null ? `${playerName(state.winner)} wins!` : outcome === 'win' ? 'You won!' : 'You lost';
+  const detail = state.endReason === 'blocked' ? `${subject} no legal moves left.`
+    : state.endReason === 'pieces' ? `${subject} fewer than three pieces left.` : `${playerName(state.winner)} wins the game.`;
+  return { outcome, title, detail };
+}

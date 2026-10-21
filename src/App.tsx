@@ -3,8 +3,11 @@ import { ArrowCounterClockwiseIcon, ArrowRightIcon, BookOpenIcon, CheckIcon, Cir
 import { Board } from './components/Board';
 import { Modal } from './components/Modal';
 import { MatchPlayers } from './components/MatchPlayers';
+import { MatchResult } from './components/MatchResult';
 import { useLocalGame } from './hooks/useLocalGame';
-import { createGame, instruction, phase } from './game/engine';
+import { useCaptureFeedback } from './hooks/useCaptureFeedback';
+import { captureMessage, matchResult } from './game/feedback';
+import { createGame, instruction, phase, playerName } from './game/engine';
 import type { Action } from './game/engine';
 import type { Difficulty } from './game/ai';
 import type { LocalMode } from './hooks/useLocalGame';
@@ -25,10 +28,17 @@ export default function App() {
   const [rules, setRules] = useState(false);
   const [confirm, setConfirm] = useState<{ title: string; run(): void } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [dismissedResult, setDismissedResult] = useState('');
   const session = useRef<MultiplayerSession | null>(null);
   const pendingSession = useRef(false);
   const state = room?.state ?? (online ? createGame() : local.state);
   const mode: Mode = online ? 'online' : local.mode;
+  const gameId = `${mode}:${room?.code ?? local.gameId}`;
+  const captureFeedback = useCaptureFeedback(state, gameId);
+  const viewer = mode === 'local' ? null : mode === 'ai' ? 1 : room?.player ?? null;
+  const result = matchResult(state, viewer);
+  const resultId = `${gameId}:${state.ply}`;
+  const recentCapture = state.lastCapture ? captureMessage(state.lastCapture, viewer) : null;
 
   useEffect(() => () => { void session.current?.close().catch(() => undefined); }, []);
   useEffect(() => {
@@ -76,13 +86,13 @@ export default function App() {
   }
 
   const enabled = online ? Boolean(room?.ready && room.connected && room.opponentOnline && room.player === state.turn && !busy && !fatal) : !local.thinking && !(local.mode === 'ai' && state.turn === 2);
-  const turnName = state.turn === 1 ? 'Ivory' : 'Onyx';
-  const statusTitle = state.winner ? state.winner === 3 ? 'An even match.' : `${state.winner === 1 ? 'Ivory' : 'Onyx'} takes the game.`
+  const turnName = playerName(state.turn);
+  const statusTitle = captureFeedback && recentCapture ? recentCapture.title : result ? result.title
     : online && !room ? 'A friend is a code away.'
       : room && !room.ready ? 'Your table is ready.'
         : room && (!room.connected || !room.opponentOnline) ? 'Waiting for connection…'
-          : local.thinking && !online ? 'Onyx is thinking…' : state.capture ? 'Three in a row.' : `${turnName} to play.`;
-  const statusText = online && !room ? 'Create a private room or join a friend’s game.'
+          : state.capture ? 'Three in a row!' : local.thinking && !online ? 'Black is thinking…' : `${turnName} to play.`;
+  const statusText = captureFeedback && recentCapture ? recentCapture.detail : result ? result.detail : online && !room ? 'Create a private room or join a friend’s game.'
     : room && !room.ready ? 'Share your room code to invite a friend.'
       : room && !room.connected ? 'Reconnecting. Moves are paused until you are back online.'
         : room && !room.opponentOnline ? 'Your opponent is away. The game will continue when they return.' : instruction(state);
@@ -110,25 +120,29 @@ export default function App() {
               <button className="primary-button" disabled={busy || configured !== true} onClick={() => void connect('create')}>{busy ? <CircleNotchIcon className="spin" size={18} aria-hidden="true" /> : 'Create a room'}<ArrowRightIcon size={18} aria-hidden="true" /></button>
               <div className="or-divider">or join a friend</div>
               <form onSubmit={(event) => { event.preventDefault(); void connect('join'); }}><label htmlFor="room-code">Room code</label><div className="join-row"><input id="room-code" value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="ABCD-EFGH" maxLength={12} autoComplete="off" autoCapitalize="characters" spellCheck={false} disabled={busy} /><button className="icon-button" type="submit" aria-label="Join room" disabled={busy || configured !== true || code.replace(/[^A-Z2-9]/g, '').length !== 8}><ArrowRightIcon size={21} /></button></div></form>
-            </> : <><span className="eyebrow">YOUR ROOM CODE</span><div className="room-code">{room.code.slice(0, 4)}-{room.code.slice(4)}<button className="icon-button" aria-label="Copy room code" onClick={() => void copyRoom()}>{copied ? <CheckIcon size={20} /> : <CopyIcon size={20} />}</button></div><button className="secondary-button" onClick={() => void copyRoom(true)}><LinkIcon size={18} aria-hidden="true" />Copy invite link</button><p className="connection-status"><WifiHighIcon size={17} aria-hidden="true" />{room.connected ? 'Connected' : 'Reconnecting'} · You play {room.player === 1 ? 'Ivory' : 'Onyx'}</p><button className="text-button leave-button" disabled={busy} onClick={() => newGame('online')}>Leave room</button></>}
+            </> : <><span className="eyebrow">YOUR ROOM CODE</span><div className="room-code">{room.code.slice(0, 4)}-{room.code.slice(4)}<button className="icon-button" aria-label="Copy room code" onClick={() => void copyRoom()}>{copied ? <CheckIcon size={20} /> : <CopyIcon size={20} />}</button></div><button className="secondary-button" onClick={() => void copyRoom(true)}><LinkIcon size={18} aria-hidden="true" />Copy invite link</button><p className="connection-status"><WifiHighIcon size={17} aria-hidden="true" />{room.connected ? 'Connected' : 'Reconnecting'} · You play {playerName(room.player)}</p><button className="text-button leave-button" disabled={busy} onClick={() => newGame('online')}>Leave room</button></>}
           </div>}
-          <MatchPlayers state={state} mode={mode} room={room} difficulty={local.difficulty} thinking={local.thinking} />
+          <MatchPlayers state={state} mode={mode} room={room} difficulty={local.difficulty} thinking={local.thinking} captureFeedback={captureFeedback} />
           <div className="sidebar-note"><span className="note-line" /><p>{mode === 'online' ? 'Private rooms for two. No account to create. Just share a code and make your move.' : 'Known as Qattaar in Balochi. A game of lines, patience, and seeing what comes next.'}</p></div>
         </aside>
 
         <section className="play-area" aria-label="Game table">
           <div className="table-topline"><span><span className={`status-dot ${online ? 'network' : ''}`} />{mode === 'ai' ? `VS COMPUTER / ${local.difficulty.toUpperCase()}` : mode === 'local' ? 'LOCAL / TWO PLAYERS' : 'ONLINE / PRIVATE ROOM'}</span><span>{String(state.ply).padStart(2, '0')} MOVES</span></div>
-          <div className={`turn-status ${state.capture ? 'mill-status' : ''}`} role="status" aria-live="polite"><span className={`status-stone ${state.turn === 1 ? 'ivory' : 'onyx'}`} /><div><h2>{statusTitle}</h2><p>{statusText}</p></div>{mode !== 'online' && <button className="icon-button undo-button" aria-label="Undo last turn" title="Undo last turn" disabled={!local.canUndo} onClick={local.undo}><ArrowCounterClockwiseIcon size={21} /></button>}</div>
-          <Board key={`${mode}-${room?.code ?? ''}`} state={state} enabled={enabled && !(online && !room)} onMove={(action) => void move(action)} />
+          <div className={`turn-status ${state.capture ? 'mill-status' : ''} ${captureFeedback ? 'capture-status' : ''} ${result ? `finished-status ${result.outcome}` : ''}`} role="status" aria-live={result ? 'assertive' : 'polite'} aria-atomic="true"><span className={`status-stone ${(captureFeedback?.player ?? state.turn) === 1 ? 'ivory' : 'onyx'}`} /><div><h2>{statusTitle}</h2><p>{statusText}</p></div>{mode !== 'online' && <button className="icon-button undo-button" aria-label="Undo last turn" title="Undo last turn" disabled={!local.canUndo} onClick={local.undo}><ArrowCounterClockwiseIcon size={21} /></button>}</div>
+          <Board key={gameId} state={state} enabled={enabled && !captureFeedback && !(online && !room)} captureFeedback={captureFeedback} onMove={(action) => void move(action)}>
+            {result && !captureFeedback && dismissedResult !== resultId && <MatchResult result={result} online={online} onAgain={() => newGame()} onDismiss={() => setDismissedResult(resultId)} />}
+          </Board>
+          {recentCapture && <p className="capture-history">Last capture · {recentCapture.detail}</p>}
           <div className="board-actions"><span>{phase(state) === 'placing' ? 'Tap an empty point to place a stone.' : 'Drag to move, or tap a stone then its destination.'}</span>{mode !== 'online' && <button className="secondary-button" onClick={() => newGame()}>New game <ArrowRightIcon size={17} aria-hidden="true" /></button>}</div>
           {(error || (!online && local.aiError)) && <div className="error-message" role="alert">{error || local.aiError}</div>}
+          {!online && local.notice && <p className="setup-notice" role="status">{local.notice}</p>}
         </section>
 
       </div>
     </main>
     <footer><span>Rooted in tradition. Played together.</span><span>QATTAAR <span className="footer-divider">/</span> NINE MEN’S MORRIS</span></footer>
 
-    {rules && <Modal title="A game of three in a row." onClose={() => setRules(false)}><div className="rules-content"><p>Each player has nine stones. Ivory goes first.</p><ol><li><strong>Place your stones.</strong> Take turns choosing empty points. Three stones in a straight connected line form a mill.</li><li><strong>Make a capture.</strong> After forming a mill, remove one opposing stone. Stones in mills are protected unless all of your opponent’s stones are in mills. A double mill still earns one capture.</li><li><strong>Move along the lines.</strong> Once all stones are placed, move one stone to an adjacent empty point. You can break a mill and form it again on a later turn.</li><li><strong>Fly with three.</strong> With exactly three stones remaining, you can move to any empty point.</li><li><strong>Win the game.</strong> After placement, leave your opponent with fewer than three stones or no legal move.</li></ol><p>A position repeated three times, or 50 full moves without a capture after placement, is a draw.</p><p className="muted">This version uses the Nine Men’s Morris rules above. Local Qattaar rules can vary.</p></div><button className="primary-button" onClick={() => setRules(false)}>Let’s play <ArrowRightIcon size={18} aria-hidden="true" /></button></Modal>}
+    {rules && <Modal title="Balochi Qattaar rules" onClose={() => setRules(false)}><div className="rules-content"><p>Each player has nine pieces. White goes first.</p><ol><li><strong>Place your pieces.</strong> Take turns choosing empty points. Three pieces in a straight connected line form a mill.</li><li><strong>Make a capture.</strong> After forming a mill, remove one opposing piece. Pieces in mills are protected unless all of your opponent’s pieces are in mills. A double mill still earns one capture.</li><li><strong>Move along the lines.</strong> Once all pieces are placed, move one piece to an adjacent empty point. You can break a mill and form it again on a later turn.</li><li><strong>Three pieces still move normally.</strong> In Balochi Qattaar, every move stays adjacent, even with only three pieces. There is no flying.</li><li><strong>Win the game.</strong> After placement, leave your opponent with fewer than three pieces or no legal move.</li></ol><p>A position repeated three times, or 50 full moves without a capture after placement, is a draw.</p></div><button className="primary-button" onClick={() => setRules(false)}>Let’s play <ArrowRightIcon size={18} aria-hidden="true" /></button></Modal>}
     {confirm && <Modal title={confirm.title} onClose={() => setConfirm(null)}><p className="confirm-copy">{room ? room.player === 1 ? 'Leaving as the host closes the room for both players. You can start a fresh room anytime.' : 'You can rejoin with this code while the host keeps the room open.' : 'Your current game will be replaced.'}</p><div className="dialog-actions"><button className="secondary-button" onClick={() => setConfirm(null)}>Keep playing</button><button className="primary-button" onClick={() => { confirm.run(); setConfirm(null); }}>Continue <ArrowRightIcon size={18} aria-hidden="true" /></button></div></Modal>}
   </div>;
 }

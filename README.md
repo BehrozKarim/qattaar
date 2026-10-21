@@ -1,6 +1,6 @@
 # Qattaar
 
-Nine Men's Morris, known to the creator as Qattaar in Balochi. A browser game with local two-player play, three AI difficulties, and private online rooms.
+Balochi Qattaar, a game in the Nine Men's Morris family. A browser game with local two-player play, three AI difficulties, and private online rooms.
 
 ## Run locally
 
@@ -13,12 +13,16 @@ npm run dev
 
 Open the localhost URL printed by Vite. Local games and AI work immediately without Firebase. Games save automatically on this device. The production build caches its assets after the first successful visit so local play and AI can work without an internet connection.
 
-The board uses ivory and charcoal stones on a sand-colored surface. On phones it fills the available width, with compact player and game controls above it. During the movement phase, drag a stone onto a valid empty point, or tap the stone and then its destination. Mouse, pen, and touch use Pointer Events; keyboard players can use Tab and Enter. Invalid drops keep the original position. Dragging is disabled during placement, capture, the opponent's turn, and finished games. Scroll and pinch zoom remain available away from movable stones.
+The board uses White and Black pieces on a sand-colored surface. On phones it fills the available width, with compact player and game controls above it. During the movement phase, drag a piece onto an adjacent empty point, or tap the piece and then its destination. Mouse, pen, and touch use Pointer Events; keyboard players can use Tab and Enter. Invalid drops keep the original position. Dragging is disabled during placement, capture, the opponent's turn, and finished games. Scroll and pinch zoom remain available away from movable pieces.
+
+A capture marks the removed piece's location with a crossed-out piece and a −1 badge for 1.8 seconds. The turn message identifies whose piece was taken and where, the affected player card highlights, and the last-capture message remains below the board. Input pauses while the capture is shown; AI waits after a capture and briefly shows a new mill before choosing its capture. Reduced-motion settings keep the marker static. Finished games show a large win/loss/draw panel with the reason, Play again, and View board controls.
 
 ```sh
 npm run check       # lint, rules-engine/protocol tests, TypeScript, production build
 npm run preview     # serve the production build
 ```
+
+For repeatable browser checks of captures, winning captures, and blocked-player wins/losses, start the dev server and open `/tests/fixtures/feedback.html`. The fixture uses the real engine, board, capture hook, and result component. It is excluded from the production bundle.
 
 ## Enable online rooms with Firebase Spark
 
@@ -28,7 +32,7 @@ npm run preview     # serve the production build
 4. Under **Build → Realtime Database**, create a database in your preferred region, starting in **locked mode**. Use Realtime Database, not Firestore.
 5. Open its **Rules** tab, paste the contents of [firebase/database.rules.json](firebase/database.rules.json), and publish. Do not use open test-mode rules. Alternatively, run `npx firebase login` followed by `npx firebase deploy --only database --project YOUR_PROJECT_ID`.
 6. Copy `.env.example` to `.env.local`, then fill in the five public Web-app settings. Find `databaseURL` on the Realtime Database page if the Web-app config omits it.
-7. Restart the dev server. In two independent browser tabs or devices, choose **Play a friend**, create a room, and join using its code or invite link. The host plays Ivory.
+7. Restart the dev server. In two independent browser tabs or devices, choose **Play a friend**, create a room, and join using its code or invite link. The host plays White.
 
 These Web-app config values are public identifiers shipped to browsers, not administrator credentials. Access is enforced by Authentication and the database rules. Never put service-account JSON, private keys, or admin credentials in any `VITE_` variable. `.env.local` is ignored by Git.
 
@@ -78,7 +82,9 @@ See [Firebase plan behavior](https://firebase.google.com/docs/projects/billing/f
 
 ## Rules and architecture
 
-The game implements placement, one capture per formed mill, protected mills, adjacent movement, flying with three stones, blocked-player/stone-count wins, threefold repetition, and a draw after 50 full moves without a capture after placement. Local Qattaar variants may use different rules; this implementation states its rules in the game.
+The game follows Balochi Qattaar: placement, one capture per formed mill, protected mills, and **adjacent movement even with only three pieces**. There is no flying. After placement, a player loses when they have fewer than three pieces or cannot make any legal move. A position repeated three times, or 50 full moves without a capture after placement, is a draw. The in-game rules explain these conditions.
+
+`src/game/ruleset.json` identifies the shared rules version. New rooms carry this version; clients reject rooms with different rules. When updating from the earlier flying-rules version, publish the updated Firebase database rules as well as the frontend, and create fresh rooms. Local saved action histories replay under the current rules; an incompatible history is backed up under `qattaar.game.legacy-rules` in local storage and a new game starts with an explanation.
 
 ```text
 src/game/          Pure board topology, rules, and AI search; no React or Firebase

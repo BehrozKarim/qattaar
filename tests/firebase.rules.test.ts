@@ -3,11 +3,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { get, ref, remove, runTransaction, set, update } from 'firebase/database';
+import { RULESET } from '../src/game/engine';
 
 let environment: RulesTestEnvironment;
 const code = 'ABCDEFGH';
 const lease = (uid = 'host', roomCode = code) => ({ uid, code: roomCode, expiresAt: Date.now() + 110_000 });
-const room = () => ({ host: 'host', guest: '', slot: '0', createdAt: Date.now(), expiresAt: Date.now() + 7_000_000, revision: 0, turn: 1 });
+const room = () => ({ ruleset: RULESET, host: 'host', guest: '', slot: '0', createdAt: Date.now(), expiresAt: Date.now() + 7_000_000, revision: 0, turn: 1 });
 const db = (uid: string) => environment.authenticatedContext(uid).database();
 
 beforeAll(async () => { environment = await initializeTestEnvironment({ projectId: 'demo-qattaar', database: { host: '127.0.0.1', port: 9000, rules: readFileSync('firebase/database.rules.json', 'utf8') } }); });
@@ -39,6 +40,13 @@ describe('room reservations', () => {
     await assertFails(set(ref(db('host'), `rooms/${code}`), room()));
     await seedRoom();
     await assertFails(set(ref(db('host'), 'rooms/ABCDJKLM'), room()));
+  });
+  it('requires the current ruleset on room creation', async () => {
+    await set(ref(db('host'), 'capacity/0'), lease());
+    await assertFails(set(ref(db('host'), `rooms/${code}`), { ...room(), ruleset: 'morris-flying' }));
+    const { ruleset: omitted, ...legacyRoom } = room();
+    expect(omitted).toBe(RULESET);
+    await assertFails(set(ref(db('host'), `rooms/${code}`), legacyRoom));
   });
   it('allows reclaiming expired reservations and deleting the abandoned room', async () => {
     await seedRoom();
@@ -73,6 +81,8 @@ describe('membership and moves', () => {
     await set(ref(db('guest'), `rooms/${code}/guest`), 'guest');
     await update(ref(db('host'), `rooms/${code}`), { 'moves/0': { uid: 'host', action: { type: 'place', to: 0 } }, revision: 1, turn: 2 });
     await assertFails(set(ref(db('guest'), `rooms/${code}/host`), 'guest'));
+    await assertFails(set(ref(db('host'), `rooms/${code}/ruleset`), 'morris-flying'));
+    await assertFails(remove(ref(db('host'), `rooms/${code}/ruleset`)));
     await assertFails(set(ref(db('host'), `rooms/${code}/unexpected`), true));
     await assertFails(remove(ref(db('guest'), `rooms/${code}/moves/0`)));
     await assertFails(update(ref(db('guest'), `rooms/${code}`), { 'moves/0/action/to': 10, 'moves/1': { uid: 'guest', action: { type: 'place', to: 3 } }, revision: 2, turn: 1 }));

@@ -116,6 +116,30 @@ label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 10px; 
 .point[data-dragging="true"] { z-index: 5; cursor: grabbing; }
 .point[data-dragging="true"] .point-surface { transform: translate(var(--drag-x, 0px), var(--drag-y, 0px)) scale(1.08); transition: none; box-shadow: 0 8px 15px #33231280; }
 .point[data-drop-target="true"] .point-surface { width: 65%; height: 65%; background: #fff8; border: 3px solid #8a3b1d; box-shadow: 0 0 0 3px #fff6; }
+.capture-ghost { z-index: 6; pointer-events: none; animation: capture-out 1800ms ease-out both; }
+.capture-ghost .point-surface { outline: 3px solid #a33125; outline-offset: 3px; }
+.capture-cross { display: grid; place-items: center; width: 80%; height: 80%; border-radius: 50%; color: #fff8ed; background: #a33125; font-size: clamp(20px, 3vw, 36px); line-height: 1; font-weight: 800; }
+.capture-badge { position: absolute; right: -10px; top: -9px; color: #fff8ed; background: #a33125; border: 2px solid var(--board); border-radius: 20px; padding: 3px 6px; font-size: 13px; font-weight: 800; }
+.capture-status { background: #462c29; border: 1px solid #d58b79; border-radius: 8px; padding: 9px 10px; }
+.capture-status h2, .capture-status p { color: #ffe1d5; }
+.capture-history { color: #e4b5a5; font-size: 12px; line-height: 1.6; margin: 10px 0 0; }
+.player-card.piece-lost { border-color: #e6a08c; background: #462c29; }
+.lost-change { color: #ffbca7; white-space: nowrap; }
+.finished-status h2 { font-size: 22px; color: var(--accent); }
+.finished-status.loss h2 { color: #ffbca7; }
+.result-overlay { position: absolute; z-index: 10; inset: 0; border-radius: inherit; display: grid; place-items: center; background: #17191ebd; padding: 16px; }
+.result-card { width: min(100%, 360px); background: #22252c; border: 2px solid var(--accent); border-radius: 14px; padding: clamp(16px, 3vw, 32px); text-align: center; box-shadow: 0 12px 40px #0005; }
+.result-card > svg { color: var(--accent); margin-bottom: 10px; }
+.result-card .eyebrow { font-size: 10px; }
+.result-card h2 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -1px; margin: 8px 0; line-height: 1.1; }
+.result-card p { color: #d0d1d8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
+.result-card button { width: 100%; }
+.result-card .text-button { margin-top: 4px; }
+.result-overlay.loss .result-card { border-color: #e6a08c; }
+.result-overlay.loss svg, .result-overlay.loss .eyebrow { color: #ffbca7; }
+.result-overlay.draw .result-card { border-color: #c1c6d4; }
+.result-overlay.draw svg, .result-overlay.draw .eyebrow { color: #c1c6d4; }
+@keyframes capture-out { 0%, 75% { opacity: 1; } 100% { opacity: .15; } }
 .board-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; }
 .board-actions > span { font-size: 12px; line-height: 1.5; color: var(--muted); }
 .online-controls { margin-top: 24px; }
@@ -203,7 +227,7 @@ footer > span:nth-child(2) { font-size: 9px; letter-spacing: 1.4px; }
   .player-card { position: relative; }
   .player-stats { gap: 8px; font-size: 10px; }
   .player-stats b { font-size: 12px; }
-  .player-stats > span:last-child { display: none; }
+  .player-stats { flex-wrap: wrap; gap: 3px 8px; }
   .turn-status { min-height: 65px; gap: 8px; padding: 9px 1px; }
   .turn-status h2 { font-size: 15px; }
   .turn-status p { font-size: 12px; }
@@ -224,8 +248,20 @@ footer > span:nth-child(2) { font-size: 9px; letter-spacing: 1.4px; }
   .dialog-actions { flex-wrap: wrap; }
   .dialog-actions > button { flex: 1; }
 }
-@media (max-width: 360px) { .mode-option > svg { display: none; } .player-stats { gap: 6px; } .player-stats b { margin-right: 0; } }
+@media (max-width: 360px) {
+  .mode-option > svg { display: none; }
+  .player-stats { gap: 3px 6px; }
+  .player-stats b { margin-right: 0; }
+  .result-overlay { padding: 8px; }
+  .result-card { padding: 12px; }
+  .result-card > svg { width: 28px; height: 28px; margin-bottom: 4px; }
+  .result-card .eyebrow { font-size: 9px; }
+  .result-card h2 { font-size: 26px; margin: 6px 0; }
+  .result-card p { font-size: 12px; line-height: 1.4; margin-bottom: 10px; }
+  .result-card .text-button { margin-top: 0; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
   .point[data-dragging="true"] .point-surface { transform: translate(var(--drag-x, 0px), var(--drag-y, 0px)); }
+  .capture-ghost { animation: none !important; }
 }

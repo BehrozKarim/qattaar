@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyAction, createGame, inMill, legalActions, phase } from './engine';
-import type { Cell, GameState } from './engine';
+import type { Cell, GameState, Player } from './engine';
 import { chooseAction } from './ai';
 import { MILLS, NEIGHBORS } from './board';
 
@@ -19,7 +19,7 @@ describe('board topology', () => {
   });
 });
 
-describe('Morris rules', () => {
+describe('Balochi Qattaar rules', () => {
   it('places alternately and rejects occupied points without mutating state', () => {
     const game = createGame(); const next = applyAction(game, { type: 'place', to: 0 });
     expect(next.turn).toBe(2); expect(next.reserves).toEqual([8, 9]); expect(game.board[0]).toBe(0);
@@ -44,15 +44,19 @@ describe('Morris rules', () => {
     expect(() => applyAction(game, { type: 'move', from: 0, to: 23 })).toThrow();
     expect(applyAction(game, { type: 'move', from: 0, to: 1 }).board[1]).toBe(1);
   });
-  it('permits flying with exactly three stones', () => {
+  it('keeps movement adjacent with exactly three pieces', () => {
     const game = position([0, 3, 6], [2, 5, 8, 14]);
-    expect(phase(game)).toBe('flying');
-    expect(applyAction(game, { type: 'move', from: 0, to: 23 }).board[23]).toBe(1);
+    expect(phase(game)).toBe('moving');
+    expect(() => applyAction(game, { type: 'move', from: 0, to: 23 })).toThrow();
+    expect(applyAction(game, { type: 'move', from: 0, to: 1 }).board[1]).toBe(1);
+    for (const action of legalActions(game)) if (action.type === 'move') expect(NEIGHBORS[action.from]).toContain(action.to);
   });
   it('wins when a capture leaves fewer than three stones', () => {
     const game = position([0, 1, 2, 21], [3, 5, 6], { capture: true });
     const next = applyAction(game, { type: 'capture', at: 3 });
     expect(next.winner).toBe(1); expect(legalActions(next)).toEqual([]);
+    expect(next.endReason).toBe('pieces');
+    expect(next.lastCapture).toEqual({ at: 3, player: 2, by: 1, ply: 1 });
   });
   it('does not end during placement when stones are still in reserve', () => {
     const game = position([0, 1, 2], [3, 5], { capture: true, reserves: [6, 7] });
@@ -61,6 +65,21 @@ describe('Morris rules', () => {
   it('wins when the next player is blocked', () => {
     const game = position([1, 9, 4, 10, 7, 11, 22, 20], [0, 3, 6, 21]);
     expect(applyAction(game, { type: 'move', from: 20, to: 19 }).winner).toBe(1);
+  });
+  it.each([1, 2] as Player[])('player %s wins by blocking all three opposing pieces', (player) => {
+    const blockers = [1, 4, 7, 9, 10, 11, 20];
+    const blocked = [0, 3, 6];
+    const game = position(player === 1 ? blockers : blocked, player === 1 ? blocked : blockers, { turn: player });
+    const next = applyAction(game, { type: 'move', from: 20, to: 19 });
+    expect(next.winner).toBe(player); expect(next.endReason).toBe('blocked');
+    expect(legalActions(next)).toEqual([]);
+  });
+  it('retains capture details after later moves for the match history', () => {
+    const game = position([0, 1, 2], [3, 5, 6], { capture: true, reserves: [6, 6] });
+    const captured = applyAction(game, { type: 'capture', at: 6 });
+    const moved = applyAction(captured, { type: 'place', to: 8 });
+    expect(moved.lastCapture).toEqual(captured.lastCapture);
+    expect(moved.lastMove).toEqual({ action: { type: 'place', to: 8 }, player: 2 });
   });
   it('draws after 100 half moves without a capture', () => {
     const game = position([0, 3, 6, 9], [2, 5, 8, 14], { quietTurns: 99 });
@@ -95,4 +114,10 @@ describe('AI', () => {
     expect(chooseAction(game, 'medium', () => 0.9)).toEqual({ type: 'place', to: 2 });
   });
   it('returns no move for a finished game', () => expect(chooseAction({ ...createGame(), winner: 1 }, 'hard')).toBeNull());
+  it.each(['easy', 'medium', 'hard'] as const)('%s obeys adjacent movement with three pieces', (level) => {
+    const game = position([0, 3, 6], [2, 5, 8, 14]);
+    const action = chooseAction(game, level, () => 0.9);
+    expect(action?.type).toBe('move');
+    if (action?.type === 'move') expect(NEIGHBORS[action.from]).toContain(action.to);
+  });
 });

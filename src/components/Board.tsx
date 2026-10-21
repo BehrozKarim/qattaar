@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PointerEvent } from 'react';
+import type { PointerEvent, ReactNode } from 'react';
 import { MILLS, POINTS, pointName } from '../game/board';
 import { legalActions } from '../game/engine';
-import type { Action, GameState } from '../game/engine';
+import type { Action, Capture, GameState } from '../game/engine';
 import { dropPoint, pointPosition } from './boardGeometry';
 import type { BoardBounds } from './boardGeometry';
 
-interface BoardProps { state: GameState; enabled: boolean; onMove(action: Action): void }
+interface BoardProps { state: GameState; enabled: boolean; onMove(action: Action): void; captureFeedback?: Capture | null; children?: ReactNode }
 interface Drag { from: number; ply: number; pointerId: number; x: number; y: number; active: boolean; element: HTMLButtonElement; bounds: BoardBounds }
 
-export function Board({ state, enabled, onMove }: BoardProps) {
+export function Board({ state, enabled, onMove, captureFeedback, children }: BoardProps) {
   const [selection, setSelection] = useState<{ point: number; ply: number } | null>(null);
   const board = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
@@ -92,7 +92,7 @@ export function Board({ state, enabled, onMove }: BoardProps) {
 
   return <div className="board-frame">
     <div className="board-coordinate top">a <span>d</span> g</div>
-    <div ref={board} className="board" role="group" aria-label="Nine Men's Morris board. Drag a stone to move, or select it and choose a destination. Keyboard: Tab and Enter.">
+    <div ref={board} className="board" role="group" aria-label="Qattaar board. Drag a piece to an adjacent point, or select it and choose a destination. Keyboard: Tab and Enter.">
       <svg className="board-lines" viewBox="0 0 600 600" aria-hidden="true">
         <g fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M48 48H552V552H48ZM132 132H468V468H132ZM216 216H384V384H216Z" />
@@ -109,8 +109,9 @@ export function Board({ state, enabled, onMove }: BoardProps) {
         return <button
           key={point} data-point={point} className={`point ${cell ? `stone ${cell === 1 ? 'ivory' : 'onyx'}` : 'empty'} ${canSelect ? 'draggable' : ''} ${selected === point ? 'selected' : ''} ${legal ? 'legal' : ''} ${state.capture && legal ? 'capturable' : ''}`}
           style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }}
-          aria-label={`${pointName(point)}: ${cell === 1 ? 'Ivory stone' : cell === 2 ? 'Onyx stone' : 'empty'}${legal ? state.capture ? ', capture' : ', available destination' : ''}`}
+          aria-label={`${pointName(point)}: ${cell === 1 ? 'White piece' : cell === 2 ? 'Black piece' : 'empty'}${legal ? state.capture ? ', capture' : ', available destination' : ''}`}
           aria-pressed={selected === point} aria-disabled={!enabled || (!legal && !canSelect)}
+          tabIndex={state.winner ? -1 : 0}
           onPointerDown={(event) => startDrag(event, point)} onPointerMove={moveDrag} onPointerUp={finishDrag}
           onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}
           onKeyDown={(event) => { if (event.key === 'Escape') { clearDrag(); setSelection(null); } }}
@@ -118,6 +119,8 @@ export function Board({ state, enabled, onMove }: BoardProps) {
           onClick={(event) => { if (suppressClick.current && event.detail !== 0) { suppressClick.current = false; return; } suppressClick.current = false; if (enabled) choose(point); }}
         ><span className="point-surface">{cell === 2 && <span className="onyx-mark" aria-hidden="true" />}</span></button>;
       })}
+      {captureFeedback && <div key={captureFeedback.ply} className={`point stone capture-ghost ${captureFeedback.player === 1 ? 'ivory' : 'onyx'}`} style={{ left: `${pointPosition(captureFeedback.at).x * 100}%`, top: `${pointPosition(captureFeedback.at).y * 100}%` }} aria-hidden="true"><span className="point-surface"><span className="capture-cross">×</span></span><span className="capture-badge">−1</span></div>}
+      {children}
     </div>
     <div className="board-coordinate bottom"><span>7</span><span>4</span><span>1</span></div>
   </div>;

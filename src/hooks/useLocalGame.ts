@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { applyAction, createGame } from '../game/engine';
+import { applyAction, createGame, RULESET } from '../game/engine';
+import { CAPTURE_FEEDBACK_MS, MILL_PREVIEW_MS } from '../game/feedback';
 import type { Action } from '../game/engine';
 import type { Difficulty } from '../game/ai';
 
 export type LocalMode = 'ai' | 'local';
-interface SavedGame { mode: LocalMode; difficulty: Difficulty; actions: Action[] }
+interface SavedGame { id: string; ruleset: string; mode: LocalMode; difficulty: Difficulty; actions: Action[]; notice?: string }
 const STORAGE_KEY = 'qattaar.game.v1';
 
 function restore(): SavedGame {
-  const fallback: SavedGame = { mode: 'ai', difficulty: 'medium', actions: [] };
+  const fallback: SavedGame = { id: crypto.randomUUID(), ruleset: RULESET, mode: 'ai', difficulty: 'medium', actions: [] };
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedGame | null;
     if (!value || !['ai', 'local'].includes(value.mode) || !['easy', 'medium', 'hard'].includes(value.difficulty) || !Array.isArray(value.actions) || value.actions.length > 2000) return fallback;
-    value.actions.reduce(applyAction, createGame());
-    return value;
+    try { value.actions.reduce(applyAction, createGame()); }
+    catch {
+      localStorage.setItem('qattaar.game.legacy-rules', JSON.stringify(value));
+      return { ...fallback, notice: 'Your old game used different rules and was saved separately. This new game uses Balochi Qattaar: adjacent moves only.' };
+    }
+    return { ...value, id: value.id ?? crypto.randomUUID(), ruleset: RULESET };
   } catch { return fallback; }
 }
 
@@ -37,7 +42,8 @@ export function useLocalGame(active: boolean) {
   useEffect(() => {
     if (!aiTurn) return;
     const worker = new Worker(new URL('../game/ai.worker.ts', import.meta.url), { type: 'module' });
-    const timer = setTimeout(() => worker.postMessage({ state, difficulty: saved.difficulty }), 300);
+    const delay = state.lastMove?.action.type === 'capture' ? CAPTURE_FEEDBACK_MS + 300 : state.capture ? MILL_PREVIEW_MS : 450;
+    const timer = setTimeout(() => worker.postMessage({ state, difficulty: saved.difficulty }), delay);
     worker.onmessage = ({ data }: MessageEvent<Action | null>) => { if (data) { setFailedPly(null); move(data); } };
     worker.onerror = () => setFailedPly(state.ply);
     return () => { clearTimeout(timer); worker.terminate(); };
@@ -48,6 +54,6 @@ export function useLocalGame(active: boolean) {
     if (saved.mode === 'ai') while (length > 0 && (history[length].turn !== 1 || history[length].capture)) length--;
     setSaved((current) => ({ ...current, actions: current.actions.slice(0, Math.max(0, length)) }));
   };
-  const reset = (mode = saved.mode, difficulty = saved.difficulty) => { setSaved({ mode, difficulty, actions: [] }); setFailedPly(null); };
-  return { state, mode: saved.mode, difficulty: saved.difficulty, move, undo, reset, thinking, aiError, canUndo: saved.actions.length > 0 };
+  const reset = (mode = saved.mode, difficulty = saved.difficulty) => { setSaved({ id: crypto.randomUUID(), ruleset: RULESET, mode, difficulty, actions: [] }); setFailedPly(null); };
+  return { state, gameId: saved.id, notice: saved.notice, mode: saved.mode, difficulty: saved.difficulty, move, undo, reset, thinking, aiError, canUndo: saved.actions.length > 0 };
 }
