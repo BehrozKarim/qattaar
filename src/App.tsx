@@ -107,7 +107,7 @@ export default function App() {
     catch { setError('Could not copy automatically. Select and copy the room code shown below.'); }
   }
 
-  const enabled = online ? Boolean(room?.ready && room.connected && room.opponentOnline && room.player === state.turn && !busy && !fatal) : !local.thinking && !(local.mode === 'ai' && state.turn === 2);
+  const enabled = online ? Boolean(room?.ready && room.connected && (room.opponentOnline || room.moveSeconds > 0) && room.player === state.turn && !busy && !fatal) : !local.thinking && !(local.mode === 'ai' && state.turn === 2);
   const turnName = room ? room.names[state.turn - 1] : playerName(state.turn);
   const againLabel = room ? !room.supportsRematch ? 'New room' : room.rematchRequested ? 'Rematch requested' : room.opponentRequestedRematch ? 'Accept rematch' : 'Play again' : 'Play again';
   const againDisabled = busy || Boolean(room && (!room.connected || room.rematchRequested));
@@ -115,12 +115,12 @@ export default function App() {
   const statusTitle = captureFeedback && recentCapture ? recentCapture.title : result ? result.title
     : online && !room ? 'A friend is a code away.'
       : room && !room.ready ? 'Your table is ready.'
-        : room && (!room.connected || !room.opponentOnline) ? 'Waiting for connection…'
+        : room && (!room.connected || (!room.opponentOnline && !room.moveSeconds)) ? 'Waiting for connection…'
           : state.capture ? 'Three in a row!' : local.thinking && !online ? 'Black is thinking…' : `${turnName} to play.`;
   const statusText = captureFeedback && recentCapture ? recentCapture.detail : result ? result.detail : online && !room ? 'Create a private room or join a friend’s game.'
     : room && !room.ready ? 'Share your room code to invite a friend.'
       : room && !room.connected ? room.moveSeconds ? 'Reconnecting. The turn clock keeps running.' : 'Reconnecting. Moves are paused until you are back online.'
-        : room && !room.opponentOnline ? room.moveSeconds ? 'Your opponent is away. The turn clock keeps running.' : 'Your opponent is away. The game will continue when they return.' : instruction(state);
+        : room && !room.opponentOnline ? room.moveSeconds ? room.player === state.turn ? 'Your opponent is away. You can still play; the clock keeps running.' : 'Your opponent is away. The turn clock keeps running.' : 'Your opponent is away. The game will continue when they return.' : instruction(state);
 
   return <div className="app-shell">
     <header className="site-header">
