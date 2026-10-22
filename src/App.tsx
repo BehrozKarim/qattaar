@@ -13,6 +13,7 @@ import type { Mode } from './components/SetupScreens';
 import { RoomDetails } from './components/RoomDetails';
 import { WaitingRoom } from './components/WaitingRoom';
 import { GameRules } from './components/GameRules';
+import { ConnectionNotice } from './components/ConnectionNotice';
 import { usePlayerName } from './hooks/usePlayerName';
 import { useCountdown } from './hooks/useCountdown';
 import { validName } from './multiplayer/room';
@@ -50,6 +51,7 @@ export default function App() {
   const [dismissedResult, setDismissedResult] = useState('');
   const session = useRef<MultiplayerSession | null>(null);
   const pendingSession = useRef(false);
+  const restoringRoom = useRef(false);
   const main = useRef<HTMLElement>(null);
   const errorMessage = useRef<HTMLDivElement>(null);
   const online = mode === 'online';
@@ -89,6 +91,7 @@ export default function App() {
     const run = () => {
       const current = session.current; session.current = null;
       if (current) { setBusy(true); void current.close().catch(() => undefined).finally(() => setBusy(false)); }
+      try { sessionStorage.removeItem('qattaar.online'); } catch { /* Optional recovery hint. */ }
       setRoom(null); setFatal(false); rememberRoom(null); navigate('home');
     };
     if (room) setConfirm({ title: 'Leave this online room?', detail: room.player === 1 ? 'Leaving as the host closes the room for both players.' : 'You can rejoin with the same code while the host keeps the room open.', run });
@@ -110,6 +113,7 @@ export default function App() {
       const current = module.createMultiplayerSession({ onRoom: (value) => {
         if (session.current !== current) return;
         setRoom(value); setScreen('match'); rememberRoom(value.code);
+        try { sessionStorage.setItem('qattaar.online', value.code); } catch { /* Optional recovery hint. */ }
       }, onError: (message) => { if (session.current === current) { setError(message); setFatal(true); } } });
       session.current = current;
       try { if (kind === 'create') await current.create(variant, profile.name.trim(), moveSeconds); else await current.join(code, profile.name.trim()); }
@@ -117,9 +121,18 @@ export default function App() {
     } catch { setError('Online play could not load. Refresh the page and try again.'); }
     finally { pendingSession.current = false; setBusy(false); }
   }
-  async function roomAction(action: 'ready' | 'rematch') {
+  async function roomAction(action: 'ready' | 'rematch' | 'pause' | 'resume' | 'resign' | 'claim') {
     setBusy(true); setError('');
-    try { if (action === 'ready') await session.current?.markReady(); else await session.current?.requestRematch(); }
+    try {
+      const current = session.current;
+      if (!current) return;
+      if (action === 'ready') await current.markReady();
+      else if (action === 'rematch') await current.requestRematch();
+      else if (action === 'pause') await current.pauseWaiting();
+      else if (action === 'resume') await current.resumeWaiting();
+      else if (action === 'resign') await current.resign();
+      else await current.claimDisconnect();
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not update the room. Please try again.'); }
     finally { setBusy(false); }
   }
@@ -141,18 +154,34 @@ export default function App() {
     catch { setError('Could not copy automatically. Select and copy the room code shown.'); }
   }
 
-  const enabled = online ? Boolean(room?.ready && !inLobby && room.connected && (room.opponentOnline || room.moveSeconds > 0) && room.player === state.turn && !busy && !fatal) : !local.thinking && !(mode === 'ai' && state.turn === 2);
+  function confirmResign() {
+    setPanel(null);
+    setConfirm({ title: 'Resign this game?', detail: 'Your opponent wins this round. You can both play again in the same room.', run: () => { void roomAction('resign'); } });
+  }
+  // Restore only an already joined room in this tab; opening an invitation still
+  // shows name entry. The ref also prevents duplicate joins under StrictMode.
+  useEffect(() => {
+    if (restoringRoom.current || session.current || pendingSession.current || !initialCode || configured !== true) return;
+    try {
+      if (sessionStorage.getItem('qattaar.online') !== initialCode) return;
+    } catch { return; }
+    restoringRoom.current = true;
+    queueMicrotask(() => { void connect('join'); });
+  });
+
+  const enabled = online ? Boolean(room?.ready && !inLobby && room.connected && !room.paused && (room.supportsRecovery || room.opponentOnline || room.moveSeconds > 0) && room.player === state.turn && !busy && !fatal) : !local.thinking && !(mode === 'ai' && state.turn === 2);
   const turnName = room ? room.names[state.turn - 1] : playerName(state.turn);
   const againLabel = room ? !room.supportsRematch ? 'New room' : room.rematchRequested ? 'Rematch requested' : room.opponentRequestedRematch ? 'Accept rematch' : 'Play again' : 'Play again';
   const againDisabled = busy || fatal || Boolean(room && (!room.connected || room.rematchRequested));
   const againNote = room?.rematchRequested ? `Waiting for ${room.names[room.player === 1 ? 1 : 0]}.` : room?.opponentRequestedRematch ? `${room.names[room.player === 1 ? 1 : 0]} wants to play again.` : room ? 'Both players must accept to start again.' : undefined;
   const statusTitle = captureFeedback && recentCapture ? recentCapture.title : result ? result.title
     : room && !room.ready ? 'Waiting for your friend…'
-    : room && (!room.connected || (!room.opponentOnline && !room.moveSeconds)) ? 'Waiting for connection…'
+    : room && (!room.connected || room.paused || (!room.opponentOnline && !room.moveSeconds && !room.supportsRecovery)) ? 'Waiting for connection…'
       : state.capture ? 'Three in a row!' : local.thinking && !online ? 'Black is thinking…' : `${turnName} to play.`;
   const statusText = captureFeedback && recentCapture ? recentCapture.detail : result ? result.detail
     : room && !room.ready ? 'Open the game menu for your room code and invite link.'
-    : room && !room.connected ? room.moveSeconds ? 'Reconnecting. The turn clock keeps running.' : 'Reconnecting. Moves are paused until you are back online.'
+    : room && !room.connected ? 'Reconnecting automatically. Keep this page open to return to the same game.'
+      : room?.paused ? 'The game and turn clock are paused while a player reconnects.'
       : room && !room.opponentOnline ? room.moveSeconds ? room.player === state.turn ? 'Your opponent is away. You can still play; the clock keeps running.' : 'Your opponent is away. The turn clock keeps running.' : 'Your opponent is away. The game will continue when they return.' : instruction(state);
   const profileField = <NameField name={profile.name} busy={busy} onName={profile.setName} onRandomize={profile.randomize} />;
   const onlineAvailable = configured === true && !busy && validName(profile.name.trim());
@@ -169,6 +198,7 @@ export default function App() {
       {screen === 'match' && room && inLobby && <WaitingRoom room={room} countdown={countdown} busy={busy} fatal={fatal} copied={copied} onCopy={(link) => void copyRoom(link)} onReady={() => void roomAction('ready')} onLeave={leave} />}
       {screen === 'match' && !inLobby && <section className="match-screen" aria-label="Game table"><h1 className="sr-only">Qattaar game</h1><div className="match-topline"><span>{mode === 'ai' ? `Computer · ${local.difficulty}` : mode === 'local' ? 'Pass & play' : `Online · Game ${(room?.round ?? 0) + 1}`}</span><span className="rules-badge">{VARIANTS[state.variant].shortName}</span></div><MatchPlayers state={state} mode={mode} room={room} difficulty={local.difficulty} thinking={local.thinking} captureFeedback={captureFeedback} />
         {room && <TurnClock room={room} />}
+        {room && <ConnectionNotice room={room} busy={busy} onPause={() => void roomAction('pause')} onResume={() => void roomAction('resume')} onClaim={() => void roomAction('claim')} />}
         <div className={`turn-status ${state.capture ? 'mill-status' : ''} ${captureFeedback ? 'capture-status' : ''} ${result ? `finished-status ${result.outcome}` : ''}`} role="status" aria-live={result ? 'assertive' : 'polite'} aria-atomic="true"><span className={`status-stone ${(captureFeedback?.player ?? state.turn) === 1 ? 'ivory' : 'onyx'}`} /><div><h2>{statusTitle}</h2><p>{statusText}</p></div>{mode !== 'online' && <button className="icon-button undo-button" aria-label="Undo last turn" disabled={!local.canUndo} onClick={local.undo}><ArrowCounterClockwiseIcon size={21} aria-hidden="true" /></button>}</div>
         <Board key={gameId} state={state} enabled={enabled && !captureFeedback} captureFeedback={captureFeedback} lastTurn={lastTurn} onMove={(action) => void move(action)}>{result && !captureFeedback && dismissedResult !== resultId && <MatchResult result={result} online={online} onAgain={playAgain} onDismiss={() => setDismissedResult(resultId)} onMenu={leave} againLabel={againLabel} againDisabled={againDisabled} againNote={againNote} />}</Board>
         {lastTurn && <LastMoveNotice move={lastTurn} />}{recentCapture && <p className="capture-history">Last capture · {recentCapture.detail}</p>}
@@ -180,7 +210,7 @@ export default function App() {
     {screen !== 'match' && <footer><span>Rooted in tradition. Played together.</span><span>QATTAAR / NINE MEN’S MORRIS</span></footer>}
     {panel === 'rules' && <Modal title={`${VARIANTS[screen === 'match' ? state.variant : variant].name} rules`} onClose={() => setPanel(null)}><GameRules variant={screen === 'match' ? state.variant : variant} /><button className="primary-button" onClick={() => setPanel(null)}>Got it<ArrowRightIcon size={18} aria-hidden="true" /></button></Modal>}
     {panel === 'room' && room && <Modal title="Room details" onClose={() => setPanel(null)}><RoomDetails room={room} copied={copied} onCopy={(link) => void copyRoom(link)} /><p className="field-hint">{room.connected ? 'Connected' : 'Reconnecting'} · You play {playerName(room.player)}</p></Modal>}
-    {panel === 'menu' && <Modal title="Game menu" onClose={() => setPanel(null)}><div className="game-menu"><button className="secondary-button" onClick={() => setPanel('rules')}><BookOpenIcon size={20} aria-hidden="true" />How to play</button>{room && <button className="secondary-button" onClick={() => setPanel('room')}>Room details & invite</button>}{!online && <button className="secondary-button" onClick={() => { setPanel(null); navigate('setup'); }}>New game</button>}<button className="secondary-button" onClick={leave}>{room ? <SignOutIcon size={20} aria-hidden="true" /> : <HouseIcon size={20} aria-hidden="true" />}{room ? 'Leave room' : 'Back to menu'}</button>{!online && <p className="field-hint">Your current game is saved on this device.</p>}{room?.moveSeconds ? <p className="field-hint">The clock keeps running while this menu is open.</p> : null}</div></Modal>}
+    {panel === 'menu' && <Modal title="Game menu" onClose={() => setPanel(null)}><div className="game-menu"><button className="secondary-button" onClick={() => setPanel('rules')}><BookOpenIcon size={20} aria-hidden="true" />How to play</button>{room && <button className="secondary-button" onClick={() => setPanel('room')}>Room details & invite</button>}{room?.supportsRecovery && room.startsAt && !state.winner && <button className="secondary-button" disabled={busy || !room.connected} onClick={confirmResign}>Resign game</button>}{!online && <button className="secondary-button" onClick={() => { setPanel(null); navigate('setup'); }}>New game</button>}<button className="secondary-button" onClick={leave}>{room ? <SignOutIcon size={20} aria-hidden="true" /> : <HouseIcon size={20} aria-hidden="true" />}{room ? 'Leave room' : 'Back to menu'}</button>{!online && <p className="field-hint">Your current game is saved on this device.</p>}{room?.moveSeconds ? <p className="field-hint">{room.paused ? 'The clock is paused while a player reconnects.' : 'The clock keeps running while this menu is open.'}</p> : null}</div></Modal>}
     {confirm && <Modal title={confirm.title} onClose={() => setConfirm(null)}><p className="confirm-copy">{confirm.detail}</p><div className="dialog-actions"><button className="secondary-button" onClick={() => setConfirm(null)}>Keep playing</button><button className="primary-button" onClick={() => { confirm.run(); setConfirm(null); }}>Continue<ArrowRightIcon size={18} aria-hidden="true" /></button></div></Modal>}
   </div>;
 }

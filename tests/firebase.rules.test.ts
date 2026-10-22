@@ -2,15 +2,16 @@ import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { get, ref, remove, serverTimestamp, set, update } from 'firebase/database';
+import { get, goOffline, onDisconnect, ref, remove, serverTimestamp, set, update } from 'firebase/database';
 import { RULESET } from '../src/game/engine';
 import { VARIANTS } from '../src/game/variants';
 import { ROOM_PROTOCOL } from '../src/multiplayer/room';
+import { recoveryState } from '../src/multiplayer/recovery';
 
 let environment: RulesTestEnvironment;
 const code = 'ABCDEFGH';
 const lease = (uid = 'host', roomCode = code) => ({ uid, code: roomCode, expiresAt: Date.now() + 110_000 });
-const room = () => ({ ruleset: RULESET, host: 'host', guest: '', slot: '0', createdAt: Date.now(), expiresAt: Date.now() + 7_000_000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, round: 0, hostName: 'Host Player', guestName: '', moveSeconds: 0, turnStartedAt: 0, turnDelayMs: 0, finished: 0, timeout: 0, startedAt: 0 });
+const room = () => ({ ruleset: RULESET, host: 'host', guest: '', slot: '0', createdAt: Date.now(), expiresAt: Date.now() + 7_000_000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, clockPausedMs: 0, turnPausedBaseMs: 0, resigned: 0, abandoned: 0, round: 0, hostName: 'Host Player', guestName: '', moveSeconds: 0, turnStartedAt: 0, turnDelayMs: 0, finished: 0, timeout: 0, startedAt: 0 });
 const db = (uid: string) => environment.authenticatedContext(uid).database();
 
 beforeAll(async () => { environment = await initializeTestEnvironment({ projectId: 'demo-qattaar', database: { host: '127.0.0.1', port: 9000, rules: readFileSync('firebase/database.rules.json', 'utf8') } }); });
@@ -20,7 +21,7 @@ afterAll(async () => { await environment?.cleanup(); });
 const joinOnly = (uid = 'guest') => update(ref(db(uid), `rooms/${code}`), { guest: uid, guestName: uid });
 async function makePlayable(uid = 'guest') {
   await environment.withSecurityRulesDisabled(async (context) => {
-    await update(ref(context.database(), `rooms/${code}`), { startedAt: Date.now() - 4000, turnStartedAt: Date.now(), turnDelayMs: 0, ready: { host: true, [uid]: true } });
+    await update(ref(context.database(), `rooms/${code}`), { startedAt: Date.now() - 4000, turnStartedAt: Date.now(), turnDelayMs: 0, ready: { host: true, [uid]: true }, presence: { host: true, [uid]: true } });
   });
 }
 async function joinRoom(uid = 'guest') { await joinOnly(uid); await makePlayable(uid); }
@@ -135,13 +136,145 @@ async function finishByTimeout() {
 }
 async function resetPayload() {
   const current = (await get(ref(db('host'), `rooms/${code}`))).val();
-  return { ...current, round: current.round + 1, revision: 0, turn: 1, finished: 0, timeout: 0, turnStartedAt: serverTimestamp(), turnDelayMs: 3000, startedAt: serverTimestamp(), moves: null, rematch: null };
+  return { ...current, round: current.round + 1, revision: 0, turn: 1, finished: 0, timeout: 0, turnStartedAt: serverTimestamp(), turnDelayMs: 3000, startedAt: serverTimestamp(), moves: null, rematch: null, clockPausedMs: 0, turnPausedBaseMs: 0, recovery: null, awayAt: null, backgroundAt: null, resigned: 0, abandoned: 0 };
 }
 async function submit(uid: string, to: number, turn: number, capture = false) {
   const current = (await get(ref(db(uid), `rooms/${code}`))).val();
   const action = capture ? { type: 'capture', at: to } : { type: 'place', to };
-  return update(ref(db(uid), `rooms/${code}`), { [`moves/${current.revision}`]: { uid, action }, revision: current.revision + 1, turn, round: current.round, finished: 0, turnStartedAt: turn === current.turn ? current.turnStartedAt : serverTimestamp(), turnDelayMs: turn === current.turn ? current.turnDelayMs : capture ? 1800 : 0 });
+  return update(ref(db(uid), `rooms/${code}`), { [`moves/${current.revision}`]: { uid, action }, revision: current.revision + 1, turn, round: current.round, finished: 0, turnStartedAt: turn === current.turn ? current.turnStartedAt : serverTimestamp(), turnDelayMs: turn === current.turn ? current.turnDelayMs : capture ? 1800 : 0, ...(current.protocol === 4 ? { turnPausedBaseMs: turn === current.turn ? current.turnPausedBaseMs : recoveryState(current, Date.now()).total } : {}) });
 }
+
+const awayPlayer = (uid: string) => update(ref(db(uid), `rooms/${code}`), { [`presence/${uid}`]: false, [`awayAt/${uid}`]: serverTimestamp(), [`backgroundAt/${uid}`]: serverTimestamp() });
+async function recoverPlayer(uid: string) {
+  const current = (await get(ref(db(uid), `rooms/${code}`))).val();
+  const pause = recoveryState(current);
+  const other = uid === current.host ? current.guest : current.host;
+  return update(ref(db(uid), `rooms/${code}`), { round: current.round, revision: current.revision, [`presence/${uid}`]: true, [`awayAt/${uid}`]: null, [`backgroundAt/${uid}`]: null, ...(pause.recovery && !pause.recovery.endedAt ? { clockPausedMs: pause.accumulated, recovery: { ...pause.recovery, endedAt: current.presence[other] === false ? 0 : serverTimestamp() } } : {}) });
+}
+async function pauseForOpponent(uid = 'host') {
+  const current = (await get(ref(db(uid), `rooms/${code}`))).val();
+  const pause = recoveryState(current);
+  return update(ref(db(uid), `rooms/${code}`), { round: current.round, revision: current.revision, clockPausedMs: pause.accumulated, recovery: { ...pause.recovery, extendedBy: uid } });
+}
+
+describe('mobile reconnection, pauses, and forfeits', () => {
+  beforeEach(async () => { await seedRoom(); await joinRoom(); await bothPresent(); });
+
+  it('lets the seated guest renew the host reservation without changing or deleting it', async () => {
+    await assertSucceeds(set(ref(db('guest'), 'capacity/0'), { ...lease(), expiresAt: Date.now() + 290000 }));
+    await assertFails(remove(ref(db('guest'), 'capacity/0')));
+    await assertFails(set(ref(db('guest'), 'capacity/0'), { ...lease('guest'), expiresAt: Date.now() + 290000 }));
+    await assertFails(set(ref(db('outsider'), 'capacity/0'), lease()));
+    await assertFails(set(ref(db('host'), 'capacity/0'), { ...lease(), expiresAt: Date.now() + 310000 }));
+  });
+  it('blocks moves and timeout claims during automatic grace, even after the original deadline', async () => {
+    await environment.withSecurityRulesDisabled(async (context) => { await update(ref(context.database(), `rooms/${code}`), { startedAt: Date.now() - 60000, moveSeconds: 30, turnStartedAt: Date.now() - 31000, 'presence/guest': false, 'awayAt/guest': Date.now() - 5000 }); });
+    await assertFails(submit('host', 0, 2));
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { finished: 2, timeout: 1 }));
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { finished: 1, abandoned: 2 }));
+    await assertSucceeds(recoverPlayer('guest'));
+    const current = (await get(ref(db('host'), `rooms/${code}`))).val();
+    expect(current.recovery.endedAt).toBeGreaterThan(current.recovery.since);
+    expect(recoveryState(current).paused).toBe(false);
+    await assertSucceeds(submit('host', 0, 2));
+  });
+  it('permits only the present opponent to extend grace, then automatically resumes on return', async () => {
+    await awayPlayer('guest');
+    await assertFails(pauseForOpponent('guest'));
+    await assertSucceeds(pauseForOpponent());
+    await assertFails(submit('host', 0, 2));
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { finished: 1, abandoned: 2 }));
+    await assertSucceeds(recoverPlayer('guest'));
+    await assertSucceeds(submit('host', 0, 2));
+  });
+  it('lets the pausing player resume while the opponent is still away, without restarting grace', async () => {
+    await awayPlayer('guest'); await pauseForOpponent();
+    const current = (await get(ref(db('host'), `rooms/${code}`))).val();
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { recovery: { ...current.recovery, endedAt: serverTimestamp() } }));
+    await assertSucceeds(update(ref(db('host'), `rooms/${code}`), { recovery: { ...current.recovery, endedAt: serverTimestamp() } }));
+    expect(recoveryState((await get(ref(db('host'), `rooms/${code}`))).val()).paused).toBe(false);
+    await assertSucceeds(submit('host', 0, 2));
+  });
+  it('settles overlapping absences once when both players return', async () => {
+    await awayPlayer('host'); await awayPlayer('guest');
+    await assertSucceeds(recoverPlayer('host'));
+    expect(recoveryState((await get(ref(db('host'), `rooms/${code}`))).val()).paused).toBe(true);
+    await assertSucceeds(recoverPlayer('guest'));
+    expect(recoveryState((await get(ref(db('host'), `rooms/${code}`))).val()).paused).toBe(false);
+  });
+  it('preserves the first background timestamp when the network drop is detected later', async () => {
+    await awayPlayer('guest');
+    const before = (await get(ref(db('host'), `rooms/${code}`))).val();
+    await update(ref(db('guest'), `rooms/${code}`), { 'presence/guest': false, 'awayAt/guest': serverTimestamp() });
+    const after = (await get(ref(db('host'), `rooms/${code}`))).val();
+    expect(recoveryState(after).recovery?.since).toBe(recoveryState(before).recovery?.since);
+    await assertSucceeds(recoverPlayer('guest'));
+    const returned = (await get(ref(db('host'), `rooms/${code}`))).val();
+    expect(returned.awayAt).toBeUndefined();
+    expect(returned.backgroundAt).toBeUndefined();
+    await awayPlayer('guest');
+    await assertSucceeds(recoverPlayer('guest'));
+    await assertSucceeds(submit('host', 0, 2));
+  });
+  it('rejects invented absence times, clock credits, and gameplay changes bundled with recovery', async () => {
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { 'presence/guest': false, 'awayAt/guest': serverTimestamp() }));
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { 'presence/guest': false, 'awayAt/guest': Date.now() - 100000 }));
+    await awayPlayer('guest');
+    const current = (await get(ref(db('guest'), `rooms/${code}`))).val();
+    const recovered = { 'presence/guest': true, recovery: { since: current.awayAt.guest, endedAt: serverTimestamp(), extendedBy: '' } };
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { ...recovered, clockPausedMs: 100000 }));
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { ...recovered, moveSeconds: 120 }));
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { ...recovered, turnStartedAt: serverTimestamp() }));
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { ...recovered, recovery: { ...recovered.recovery, since: current.awayAt.guest - 1000 } }));
+    await assertSucceeds(recoverPlayer('guest'));
+  });
+  it('allows resignation out of turn and while paused, but never on another player’s behalf', async () => {
+    await awayPlayer('host');
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { resigned: 1, finished: 2 }));
+    await assertFails(update(ref(db('outsider'), `rooms/${code}`), { resigned: 2, finished: 1 }));
+    await assertSucceeds(update(ref(db('guest'), `rooms/${code}`), { round: 0, resigned: 2, finished: 1 }));
+    await assertFails(submit('host', 0, 2));
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { resigned: 1, finished: 2 }));
+  });
+  it('allows a disconnect forfeit only after grace and rejects it once the opponent returns', async () => {
+    await awayPlayer('guest');
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { abandoned: 2, finished: 1 }));
+    await environment.withSecurityRulesDisabled(async (context) => { await update(ref(context.database(), `rooms/${code}`), { startedAt: Date.now() - 150000, 'awayAt/guest': Date.now() - 91000, 'backgroundAt/guest': Date.now() - 91000 }); });
+    await assertFails(update(ref(db('guest'), `rooms/${code}`), { abandoned: 2, finished: 1 }));
+    await assertSucceeds(update(ref(db('host'), `rooms/${code}`), { abandoned: 2, finished: 1 }));
+  });
+  it('rejects a disconnect claim when the opponent has returned, and permits a rematch after resignation', async () => {
+    await awayPlayer('guest'); await recoverPlayer('guest');
+    await assertFails(update(ref(db('host'), `rooms/${code}`), { abandoned: 2, finished: 1 }));
+    await update(ref(db('guest'), `rooms/${code}`), { resigned: 2, finished: 1 });
+    await set(ref(db('host'), `rooms/${code}/rematch/host`), true);
+    await set(ref(db('guest'), `rooms/${code}/rematch/guest`), true);
+    const fresh = await resetPayload();
+    await awayPlayer('guest');
+    await assertFails(set(ref(db('host'), `rooms/${code}`), fresh));
+    await recoverPlayer('guest');
+    await assertSucceeds(set(ref(db('host'), `rooms/${code}`), await resetPayload()));
+    const current = (await get(ref(db('host'), `rooms/${code}`))).val();
+    expect(current).toMatchObject({ round: 1, resigned: 0, abandoned: 0, clockPausedMs: 0, turnPausedBaseMs: 0 });
+    expect(current.recovery).toBeUndefined();
+  });
+  it('records a real connection drop on the server without closing the room', async () => {
+    const connection = db('guest');
+    await onDisconnect(ref(connection, `rooms/${code}`)).update({ 'presence/guest': false, 'awayAt/guest': serverTimestamp() });
+    goOffline(connection);
+    let stored;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      stored = (await get(ref(db('host'), `rooms/${code}`))).val();
+      if (stored.presence.guest === false) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(stored.presence.guest).toBe(false);
+    expect(stored.awayAt.guest).toBeGreaterThan(0);
+    expect(stored.host).toBe('host');
+    expect(recoveryState(stored).paused).toBe(true);
+    await assertSucceeds(recoverPlayer('guest'));
+  });
+});
 
 describe('names and clocks', () => {
   beforeEach(seedRoom);

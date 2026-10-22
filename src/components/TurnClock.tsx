@@ -12,11 +12,11 @@ export function TurnClock({ room }: { room: RoomView }) {
     return () => { clearInterval(interval); window.removeEventListener('focus', tick); };
   }, [room.deadline]);
   if (!room.moveSeconds) return null;
-  const remaining = room.deadline === null ? room.state.endReason === 'timeout' ? 0 : room.moveSeconds : Math.min(room.moveSeconds, Math.max(0, Math.ceil((room.deadline - now - room.serverOffset) / 1000)));
-  const label = room.state.winner ? 'Game finished' : !room.ready ? 'Clock starts when your friend joins' : `${room.names[room.state.turn - 1]}’s turn`;
+  const remaining = room.frozenRemainingMs !== null ? Math.ceil(room.frozenRemainingMs / 1000) : room.deadline === null ? room.state.endReason === 'timeout' ? 0 : room.moveSeconds : Math.min(room.moveSeconds, Math.max(0, Math.ceil((room.deadline - now - room.serverOffset) / 1000)));
+  const label = room.state.winner ? 'Game finished' : room.paused ? 'Clock paused · reconnecting' : !room.ready ? 'Clock starts when your friend joins' : `${room.names[room.state.turn - 1]}’s turn`;
   const normalFinish = Boolean(room.state.winner && room.state.endReason !== 'timeout');
   return <div className={`turn-clock ${remaining <= 10 && room.deadline !== null ? 'clock-low' : ''}`} aria-label={normalFinish ? label : `${label}. ${remaining} seconds remaining.`}>
     <div><strong>{label}</strong><span>{timerLabel(room.moveSeconds)} per turn · includes capture</span></div>
-    <time aria-hidden="true">{normalFinish ? '—' : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`}</time>
+    <time aria-hidden="true">{normalFinish || !room.connected ? '—' : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`}</time>
   </div>;
 }

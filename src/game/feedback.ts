@@ -33,6 +33,8 @@ export function matchResult(state: GameState, viewer: Player | null) {
   const title = viewer === null ? `${playerName(state.winner)} wins!` : outcome === 'win' ? 'You won!' : 'You lost';
   const detail = state.endReason === 'blocked' ? `${subject} no legal moves left.`
     : state.endReason === 'timeout' ? `${viewer === loser ? 'You ran' : `${playerName(loser)} ran`} out of time.`
+    : state.endReason === 'resigned' ? `${viewer === loser ? 'You resigned' : 'Your opponent resigned'} from the game.`
+    : state.endReason === 'disconnected' ? `${viewer === loser ? 'You did' : 'Your opponent did'} not reconnect before the grace period ended.`
     : state.endReason === 'pieces' ? `${subject} fewer than three pieces left.` : `${playerName(state.winner)} wins the game.`;
   return { outcome, title, detail };
 }

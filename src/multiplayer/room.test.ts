@@ -6,7 +6,7 @@ import { randomPlayerName } from '../hooks/usePlayerName';
 import { replayRoom, ROOM_PROTOCOL, scheduledStart, START_COUNTDOWN_MS, turnDeadline, validName } from './room';
 import type { StoredRoom } from './room';
 
-const room = (): StoredRoom => ({ ruleset: RULESET, host: 'host', guest: 'guest', slot: '0', createdAt: 0, expiresAt: 7200000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, round: 0, hostName: 'Behroz', guestName: 'Swift Falcon', moveSeconds: 30, turnStartedAt: 1000, turnDelayMs: 0, finished: 0, timeout: 0, startedAt: 1, ready: { host: true, guest: true } });
+const room = (): StoredRoom => ({ ruleset: RULESET, host: 'host', guest: 'guest', slot: '0', createdAt: 0, expiresAt: 7200000, revision: 0, turn: 1, protocol: ROOM_PROTOCOL, clockPausedMs: 0, turnPausedBaseMs: 0, resigned: 0, abandoned: 0, round: 0, hostName: 'Behroz', guestName: 'Swift Falcon', moveSeconds: 30, turnStartedAt: 1000, turnDelayMs: 0, finished: 0, timeout: 0, startedAt: 1, ready: { host: true, guest: true } });
 function move(current: StoredRoom, action: Action, now: number) {
   const state = replayRoom(current); const next = applyAction(state, action);
   return { ...current, moves: { ...current.moves, [current.revision]: { uid: state.turn === 1 ? current.host : current.guest, action } }, revision: current.revision + 1, turn: next.turn, turnStartedAt: next.turn === state.turn ? current.turnStartedAt : now, turnDelayMs: next.turn === state.turn ? current.turnDelayMs : action.type === 'capture' ? CAPTURE_FEEDBACK_MS : 0, finished: next.winner };

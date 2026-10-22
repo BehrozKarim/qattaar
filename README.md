@@ -99,15 +99,44 @@ The deployment contains static assets only, with no Vercel Functions. Vercel's H
 
 - Firebase is initialized only when entering online play; AI and local games do not use a database connection. Leaving online play explicitly disconnects the client.
 - There are **40 server-enforced room reservation slots**, accommodating up to 80 seated players. A waiting room reserves the invited player's seat too. Joining/reconnecting clients can temporarily use additional connections.
-- Only an owner or an expired lease can modify a reservation. Other players cannot list occupied reservation details. Competing reservations and guest joins use transactions.
-- Hosts renew reservations every 30 seconds, with a two-minute expiry. Abandoned reservations can then be reused. Browser suspension can cause expiry; the app reports that the room must be recreated. Firebase presence detects disconnections, which may take time.
+- Only an owner, its seated guest renewing the same reservation, or a new creator reclaiming an expired lease can modify a reservation. Other players cannot list occupied reservation details. Competing reservations and guest joins use transactions.
+- Either seated player renews the reservation every 30 seconds, with a five-minute expiry. Reconnecting clients renew immediately. This keeps a room alive when the host switches apps while the guest remains connected. If both devices stay away long enough, an expired reservation can still be reclaimed. Rooms also retain their original two-hour maximum lifetime.
 - Rooms last at most two hours. The next creator reclaiming a reservation removes its old room; closing a room as its host removes it immediately. There are at most 40 normally retained rooms. One abandoned room can remain per slot until reclamation, without a paid cleanup service.
 - Moves are capped at 2,000 actions per game. Rematches clear the previous game's history while retaining the original room expiry. Clients listen only to their room, not to a global lobby. History is bounded, but replay/download usage grows over a match.
-- Countdowns tick locally without per-second database writes. Turn changes use server timestamps, and database rules reject moves arriving after the deadline. Either connected player can settle the timeout result; if both disconnect, settlement happens when a player reconnects while the room reservation remains valid. There is no scheduled backend task or Cloud Function.
+- Countdowns tick locally without per-second database writes. Turn changes, absence markers, and reconnection endpoints use server timestamps. A disconnection or backgrounded browser freezes the board and turn clock for **90 seconds**. During that grace period, the connected opponent can choose **Pause while waiting** to extend the pause until the friend returns, or choose **Resume clock** later. Without an extended pause, the clock resumes after grace; the remaining player can also **Claim game** if the opponent is still absent. The rules enforce grace, pause ownership, clock accounting, timeout, and forfeit conditions. There is no scheduled backend task or Cloud Function: claims and timeout settlement require a connected client.
 - Spark's **100 concurrent Realtime Database connections** are the hard fallback. Firebase rejects additional connections while existing users remain connected. The app's room cap controls seats, not every incoming connection, so connection failures are handled separately.
 - Connection limits do not cap total monthly downloads/storage. Those quotas can still be exhausted. On Spark the result is restricted/unavailable online play, not automatic usage billing. Keep the project on Spark without linked billing.
 
 See [Firebase plan behavior](https://firebase.google.com/docs/projects/billing/firebase-pricing-plans) and [Realtime Database limit handling](https://firebase.google.com/docs/database/faq-and-troubleshooting). Hosting quotas are separate.
+
+## Reconnection and resigning
+
+Switching to another app or losing connectivity does not leave or destroy a room.
+The UI shows the reconnecting player and the grace countdown, and marks the turn
+clock as paused. Overlapping absences share one pause interval. A later network
+failure preserves the time at which the player originally backgrounded the app.
+The Firebase adapter re-registers disconnect handlers and restores presence when
+the connection or visible page returns. The same tab remembers its room and
+anonymous identity across reloads, allowing automatic rejoining. Clearing site
+storage, using a different browser, or losing the original tab session can lose
+that anonymous seat. Mobile operating systems can still suspend network access;
+these features recover the game rather than keeping a background phone online.
+
+Use **Game menu → Resign game** to concede an active round. A confirmation names
+the consequence, both players see the result, and the room remains available for
+a rematch. Both players must be present before a rematch starts. Explicitly
+leaving as host still closes the room for both players.
+
+New rooms use protocol 4. Existing protocol 2/3 rooms remain playable with their
+original timing behavior. Refresh both browsers and create a new room to use
+reconnection grace, pause controls, and resignation. Publish the database rules
+and frontend together when deploying this update.
+
+To check mobile recovery, create a timed room on two devices, make a move, switch
+one phone to another app, and verify the other device shows a frozen clock and
+grace notice. Choose Pause while waiting, return to the game, and check the board
+and remaining turn time. Also reload during a game, test a brief network loss,
+resign from the game menu, and accept a rematch on both devices.
 
 ## Rules and architecture
 

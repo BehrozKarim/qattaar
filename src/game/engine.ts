@@ -9,7 +9,7 @@ export type Cell = 0 | Player;
 export type Action = { type: 'place'; to: number } | { type: 'move'; from: number; to: number } | { type: 'capture'; at: number };
 export interface Capture { at: number; player: Player; by: Player; ply: number }
 export interface TurnRecord { action: Exclude<Action, { type: 'capture' }>; capturedAt?: number; ply: number }
-export type EndReason = 'pieces' | 'blocked' | 'repetition' | 'no-capture' | 'timeout';
+export type EndReason = 'pieces' | 'blocked' | 'repetition' | 'no-capture' | 'timeout' | 'resigned' | 'disconnected';
 export interface GameState {
   variant: Variant;
   board: Cell[];

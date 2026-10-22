@@ -7,5 +7,5 @@ export function NameField({ name, busy, onName, onRandomize }: { name: string; b
 }
 
 export function TurnTimer({ seconds, busy, onSeconds }: { seconds: MoveSeconds; busy: boolean; onSeconds(seconds: MoveSeconds): void }) {
-  return <div className="timer-field"><label htmlFor="move-timer">Time per turn</label><select id="move-timer" value={seconds} disabled={busy} onChange={(event) => onSeconds(Number(event.target.value) as MoveSeconds)}>{MOVE_TIMES.map((value) => <option key={value} value={value}>{timerLabel(value)}</option>)}</select><p className="field-hint">{seconds ? 'Running out of time loses the game. The clock continues through disconnections.' : 'Take your time. There is no countdown.'}</p></div>;
+  return <div className="timer-field"><label htmlFor="move-timer">Time per turn</label><select id="move-timer" value={seconds} disabled={busy} onChange={(event) => onSeconds(Number(event.target.value) as MoveSeconds)}>{MOVE_TIMES.map((value) => <option key={value} value={value}>{timerLabel(value)}</option>)}</select><p className="field-hint">{seconds ? 'Running out of time loses the game. A disconnect pauses the clock for 90 seconds; your friend can pause longer.' : 'Take your time. There is no turn timer. Disconnects still have a 90-second grace period.'}</p></div>;
 }

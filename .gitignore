@@ -10,3 +10,6 @@ coverage/
 .vercel/
 test-results/
 .local/
+
+# Local security review notes (do not publish)
+/SECURITY-TODO.local.md

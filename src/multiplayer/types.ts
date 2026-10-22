@@ -21,6 +21,13 @@ export interface RoomView {
   youReady: boolean;
   opponentReady: boolean;
   startsAt: number | null;
+  supportsRecovery: boolean;
+  paused: boolean;
+  pausedByYou: boolean;
+  waitingLonger: boolean;
+  graceUntil: number | null;
+  canClaimDisconnect: boolean;
+  frozenRemainingMs: number | null;
 }
 
 /** UI depends on this contract, not on a particular realtime provider. */
@@ -30,6 +37,10 @@ export interface MultiplayerSession {
   move(action: Action): Promise<void>;
   requestRematch(): Promise<void>;
   markReady(): Promise<void>;
+  pauseWaiting(): Promise<void>;
+  resumeWaiting(): Promise<void>;
+  resign(): Promise<void>;
+  claimDisconnect(): Promise<void>;
   close(): Promise<void>;
 }
 
